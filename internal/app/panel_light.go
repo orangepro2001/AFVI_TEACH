@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/core"
 )
 
 func init() {

@@ -1,13 +1,12 @@
-// Command teach-imgui is the native AFVI teaching app: Dear ImGui (cimgui-go, GLFW +
+// Package app is the native AFVI teaching app: Dear ImGui (cimgui-go, GLFW +
 // OpenGL3) front end over the Go port of teach-core. It replaces the WebView2 shell.
-package main
+package app
 
 import (
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -17,18 +16,16 @@ import (
 	_ "github.com/AllenDang/cimgui-go/impl/glfw"
 	_ "github.com/AllenDang/cimgui-go/impl/opengl3"
 
-	"afvi/teach-imgui/config"
+	"afvi/teach-imgui/internal/config"
 )
 
 // WindowTitle is also used by the self-test to find the window for screenshots.
 const WindowTitle = "Color AFVI Master Teach"
 
-func init() {
-	// GLFW and OpenGL require all calls from the main OS thread.
-	runtime.LockOSThread()
-}
-
-func main() {
+// Run parses the command line, loads the machine configuration and runs the UI main loop.
+// It must be called from the main goroutine on a locked OS thread (GLFW and OpenGL
+// require every call to come from the main OS thread); cmd/teach-imgui does that.
+func Run() {
 	cfgFlag := flag.String("config", "", "machine configuration file (afvi.toml); default: AFVI_CONFIG, next to the exe, or the working directory")
 	machine := flag.String("machine", "", "machine name to activate (case-insensitive)")
 	ref := flag.String("ref", "", "reference directory (contains FM1/FM2/BM); upserts the simulated REFERENCE machine")

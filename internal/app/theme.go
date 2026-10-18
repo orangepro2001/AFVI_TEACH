@@ -1,4 +1,4 @@
-package main
+package app
 
 import "github.com/AllenDang/cimgui-go/imgui"
 

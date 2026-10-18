@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -10,8 +10,8 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/glfwbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"afvi/teach-imgui/config"
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/config"
+	"afvi/teach-imgui/internal/core"
 )
 
 // Panel is one mode tab (light / align / defect). All methods run on the UI thread;

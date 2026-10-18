@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"strconv"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"afvi/teach-imgui/config"
+	"afvi/teach-imgui/internal/config"
 )
 
 // hostStat caches the result of CheckHostPath for one host of the selected machine.

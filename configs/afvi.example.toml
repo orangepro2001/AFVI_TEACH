@@ -1,8 +1,8 @@
 # AFVI Teach machine configuration (example).
 #
-# Copy this file to "afvi.toml" next to the executable (or pass -config <file>) and
-# adjust the machines. The real afvi.toml is git-ignored because it holds machine
-# addresses and local paths.
+# Copy this file to "bin/afvi.toml" next to the executable, or to "afvi.toml" in the
+# project root, or pass -config <file>, and adjust the machines. The real afvi.toml is
+# git-ignored because it holds machine addresses and local paths.
 #
 # Search order: -config flag, AFVI_CONFIG environment variable, afvi.toml next to the
 # executable, afvi.toml in the working directory.
@@ -19,7 +19,9 @@ theme = "light"
 # UI language: "zh", "en" or "ko".
 lang = "zh"
 
-# The simulated machine: reads the local reference directory next to this file.
+# The simulated machine: reads the project's reference/ directory. The relative paths
+# '../reference/...' below assume this file sits in configs/ or bin/ (one level below
+# the project root); when it sits in the project root use 'reference/FM1' etc.
 [[machine]]
 name = "REFERENCE"
 address = "localhost"

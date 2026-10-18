@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"math"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/core"
 )
 
 // Compact label-left controls for dense industrial panels. Every control takes a stable

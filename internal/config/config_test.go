@@ -291,7 +291,7 @@ func TestResolveExplicitExisting(t *testing.T) {
 }
 
 func TestExampleFileParses(t *testing.T) {
-	cfg, err := Load("../afvi.example.toml")
+	cfg, err := Load("../../configs/afvi.example.toml")
 	if err != nil {
 		t.Fatalf("Load example: %v", err)
 	}

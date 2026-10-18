@@ -4,10 +4,7 @@ Go + Dear ImGui 原生实现的 AFVI 彩色检查机教学桌面软件。
 
 ## 项目概述
 
-本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言和 Dear ImGui 构建，取代了基于 WebView2 的方案。包含两个版本：
-
-- **teach-imgui**：完整功能版本，包含光照、对齐、缺陷三大功能页面
-- **teach-imgui-spike**：可行性验证原型，功能简化，适合快速验证
+本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言和 Dear ImGui 构建，取代了基于 WebView2 的方案。应用为 **teach-imgui**，包含光照、对齐、缺陷三大功能页面。
 
 ## 快速开始
 
@@ -35,34 +32,31 @@ x86_64-w64-mingw32-gcc --version
 ### 构建
 
 ```bash
-# 构建 teach-imgui（推荐）
-cd teach-imgui
-./build-wsl.sh
-
-# 或构建 teach-imgui-spike（原型）
-cd teach-imgui-spike
-./build-wsl.sh
+# 构建 teach-imgui
+./scripts/build-wsl.sh
 ```
 
-详细构建说明见 [BUILD_NATIVE.md](BUILD_NATIVE.md)。
+输出为 `bin/teach-imgui.exe`。
+
+详细构建说明见 [docs/BUILD.md](docs/BUILD.md)。
 
 ### 运行（Windows 环境）
 
 ```powershell
 # 基本运行
-.\teach-imgui.exe
+.\bin\teach-imgui.exe
 
 # 指定参数
-.\teach-imgui.exe -ref C:\path\to\reference -theme dark -lang zh
+.\bin\teach-imgui.exe -ref C:\path\to\reference -theme dark -lang zh
 
 # 指定机台配置文件
-.\teach-imgui.exe -config afvi.toml -machine AFVI-01
+.\bin\teach-imgui.exe -config afvi.toml -machine AFVI-01
 
 # 启动时打开特定型号
-.\teach-imgui.exe -model FM1/25fbo015-15
+.\bin\teach-imgui.exe -model FM1/25fbo015-15
 
 # 自测模式
-.\teach-imgui.exe -selftest -out selftest-output
+.\bin\teach-imgui.exe -selftest -out selftest-output
 ```
 
 界面采用经典 Win32（"Windows Classic"）外观：3D 立体边框、灰色面板、深蓝渐变对话框标题栏、属性表风格页签，以及菜单栏、工具栏和多窗格状态栏。默认主题为经典浅灰（`light`），深色主题（`dark`）沿用同一套立体边框方案。机台信息（名称、地址、FM1/FM2/BM 数据根目录）保存在 `afvi.toml` 中，可通过「文件 ▸ 机台配置…」或工具栏的 `…` 按钮编辑。
@@ -71,39 +65,35 @@ cd teach-imgui-spike
 
 ```
 AFVI_TEACH/
-├── teach-imgui/              # 完整功能版本
-│   ├── core/                 # 核心算法（Go 移植）
-│   ├── config/               # 机台配置包（afvi.toml，纯 Go）
-│   ├── main.go               # 入口
-│   ├── app.go                # 应用框架（菜单栏 / 工具栏 / 页签 / 状态栏）
-│   ├── win32.go              # Win32 立体边框原语
-│   ├── dlg_config.go         # 机台配置对话框
-│   ├── afvi.example.toml     # 机台配置示例
-│   ├── panel_*.go            # 功能页面
-│   ├── build-wsl.sh          # WSL2 构建脚本
-│   ├── build.ps1             # Windows 构建脚本
-│   └── README.md             # 详细说明
-│
-├── teach-imgui-spike/        # 可行性验证原型
-│   ├── main.go               # 主程序
-│   ├── build-wsl.sh          # WSL2 构建脚本
-│   └── README.md             # 说明
-│
+├── go.mod, go.sum            # 模块 afvi/teach-imgui（Go 1.27）
+├── cmd/teach-imgui/main.go   # 程序入口（锁定 OS 线程，调用 app.Run）
+├── internal/
+│   ├── app/                  # UI 应用（package app）
+│   │   ├── run.go            # Run()：命令行参数、配置加载、字体、窗口、主循环
+│   │   ├── app.go            # Panel 接口、共享状态、布局（菜单栏 / 工具栏 / 页签 / 状态栏）
+│   │   ├── win32.go          # Win32 立体边框原语
+│   │   ├── dlg_config.go     # 机台配置对话框
+│   │   ├── jobs.go  viewer.go  models.go  pack.go  widgets.go  theme.go  i18n.go
+│   │   ├── panel_light.go  panel_align.go  panel_defect.go
+│   │   └── selftest.go  capture_windows.go
+│   ├── core/                 # 核心算法（Go 移植）与测试
+│   └── config/               # 机台配置包（afvi.toml，纯 Go）与测试
+├── configs/afvi.example.toml # 机台配置示例
+├── scripts/build-wsl.sh      # WSL2 构建脚本
+├── scripts/build.ps1         # Windows 构建脚本
+├── docs/BUILD.md             # 完整构建指南
+├── docs/USAGE.md             # 使用说明
+├── docs/REFERENCE_SETUP.md   # reference 目录设置说明
 ├── reference/                # 机台测试数据（需单独配置）
 │   ├── FM1/
 │   ├── FM2/
 │   └── BM/
-│
-├── docs/                     # 文档
-│   └── REFERENCE_SETUP.md    # reference 目录设置说明
-│
-├── BUILD_NATIVE.md           # 完整构建指南
+├── bin/                      # 构建输出（bin/teach-imgui.exe）
+├── .gitignore
 └── README.md                 # 本文件
 ```
 
 ## 功能特性
-
-### teach-imgui（完整版）
 
 - **光照页面**：亮度调节、GV 测量
 - **对齐页面**：ROI 管理、图像对齐、遮挡处理
@@ -118,13 +108,6 @@ AFVI_TEACH/
   - 对齐计算：~150 ms
   - UI 帧率：60 fps
 
-### teach-imgui-spike（原型）
-
-- 基础图像显示
-- 亮度调节
-- 缩放、平移操作
-- 性能测试功能
-
 ## 操作说明
 
 ### 通用操作
@@ -136,7 +119,7 @@ AFVI_TEACH/
 - **工具栏**：机台下拉框 + `…` 按钮、型号下拉框、加载状态
 - **页签**：切换光照 / 对齐 / 缺陷页
 
-### teach-imgui 页面操作
+### 页面操作
 
 **光照页**：
 - 左侧滑块：调节亮度
@@ -155,7 +138,7 @@ AFVI_TEACH/
 
 reference 目录包含机台测试数据，是应用运行所必需的。详细设置说明见 [docs/REFERENCE_SETUP.md](docs/REFERENCE_SETUP.md)。
 
-机台信息（名称、地址、FM1/FM2/BM 数据根目录）保存在 `afvi.toml` 中：查找顺序为 `-config <文件>` → 环境变量 `AFVI_CONFIG` → exe 同级的 `afvi.toml` → 工作目录的 `afvi.toml`；相对路径相对 `afvi.toml` 所在目录解析。示例见 `teach-imgui/afvi.example.toml`，真正的 `afvi.toml` 已被 git 忽略。没有配置文件时，应用按下面的 reference 查找顺序模拟一台 `REFERENCE` 机台。
+机台信息（名称、地址、FM1/FM2/BM 数据根目录）保存在 `afvi.toml` 中：查找顺序为 `-config <文件>` → 环境变量 `AFVI_CONFIG` → exe 同级的 `afvi.toml` → 工作目录的 `afvi.toml`；相对路径相对 `afvi.toml` 所在目录解析。示例见 `configs/afvi.example.toml`，真正的 `afvi.toml` 已被 git 忽略。没有配置文件时，应用按下面的 reference 查找顺序模拟一台 `REFERENCE` 机台。
 
 ### 快速设置
 
@@ -184,8 +167,7 @@ ln -s /path/to/existing/reference ./reference
 ### 单元测试
 
 ```bash
-cd teach-imgui
-go test ./config/... ./core/...
+go test ./internal/config/... ./internal/core/...
 ```
 
 配置包测试 + 58 个核心单元测试，覆盖核心算法，与 TypeScript 版本跨语言验证一致。
@@ -194,7 +176,7 @@ go test ./config/... ./core/...
 
 ```bash
 # WSL2 构建后，传输到 Windows 运行
-.\teach-imgui.exe -selftest -out selftest-output
+.\bin\teach-imgui.exe -selftest -out selftest-output
 ```
 
 自测会：
@@ -235,26 +217,26 @@ go test ./config/... ./core/...
 
 ### 添加新页面
 
-1. 实现 `Panel` 接口（在 `app.go` 中定义）
+1. 实现 `Panel` 接口（在 `internal/app/app.go` 中定义）
 2. 在 `init()` 中调用 `registerPanel`
 3. 实现页面的 `Render` 方法
 
 ### 修改核心算法
 
-1. 编辑 `teach-imgui/core/` 中的相关文件
-2. 运行单元测试：`go test ./core/...`
+1. 编辑 `internal/core/` 中的相关文件
+2. 运行单元测试：`go test ./internal/core/...`
 3. 重新构建应用
 
 ### 构建和测试流程
 
 1. 修改代码
-2. 在 WSL2 中运行 `./build-wsl.sh`
+2. 在 WSL2 中运行 `./scripts/build-wsl.sh`
 3. 将生成的 `.exe` 传输到 Windows
 4. 在 Windows 上运行和测试
 
 ## 故障排除
 
-见 [BUILD_NATIVE.md](BUILD_NATIVE.md) 中的故障排除章节。
+见 [docs/BUILD.md](docs/BUILD.md) 中的故障排除章节。
 
 ## 贡献
 

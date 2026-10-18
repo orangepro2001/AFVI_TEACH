@@ -1,10 +1,10 @@
-package main
+package app
 
 import (
 	"runtime"
 	"sync"
 
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/core"
 )
 
 // RGBA buffers for full-resolution textures are ~94 MB; recycle them instead of

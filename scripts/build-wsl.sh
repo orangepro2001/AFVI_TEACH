@@ -4,8 +4,8 @@
 
 set -euo pipefail
 
-# Always run from script directory
-cd "$(dirname "${BASH_SOURCE[0]}")"
+# Always run from the project root
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 SELFTEST=false
 OUT="selftest-out"
@@ -51,8 +51,8 @@ if [ "$OFFLINE" = true ]; then
 fi
 
 # --- 1. gofmt ----------------------------------------------------------------
-echo "==> gofmt -l ."
-unformatted=$(gofmt -l . || true)
+echo "==> gofmt -l cmd internal"
+unformatted=$(gofmt -l cmd internal || true)
 if [ -n "$unformatted" ]; then
     echo "The following files are not gofmt-clean:"
     echo "$unformatted"
@@ -63,16 +63,17 @@ fi
 echo "==> go vet ./..."
 go vet ./...
 
-# --- 3. core tests (pure Go) -------------------------------------------------
-echo "==> go test ./core/..."
-# Run tests natively on Linux (core is pure Go)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./core/...
+# --- 3. config and core tests (pure Go) --------------------------------------
+echo "==> go test ./internal/config/... ./internal/core/..."
+# Run tests natively on Linux (config and core are pure Go)
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/...
 
 # --- 4. build ----------------------------------------------------------------
 echo "==> go build (cross-compile to Windows)"
-go build -ldflags "-s -w -H windowsgui" -o teach-imgui.exe .
+mkdir -p bin
+go build -ldflags "-s -w -H windowsgui" -o bin/teach-imgui.exe ./cmd/teach-imgui
 
-exe="teach-imgui.exe"
+exe="bin/teach-imgui.exe"
 if [ -f "$exe" ]; then
     size_mb=$(du -h "$exe" | cut -f1)
     echo "Built $exe ($size_mb)"
@@ -85,7 +86,7 @@ fi
 if [ "$SELFTEST" = true ]; then
     echo "WARNING: Self-test requires Windows environment"
     echo "Transfer $exe to Windows and run:"
-    echo "  .\\$exe -selftest -out $OUT"
+    echo "  .\\bin\\teach-imgui.exe -selftest -out $OUT"
 fi
 
 echo "OK"

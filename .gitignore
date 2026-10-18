@@ -18,11 +18,9 @@ reference/
 
 # Machine configuration (holds machine addresses and local paths)
 afvi.toml
-teach-imgui/afvi.toml
 
 # Build outputs
-teach-imgui/teach-imgui.exe
-teach-imgui-spike/teach-imgui-spike.exe
+bin/
 
 # Self-test outputs
 selftest-out/

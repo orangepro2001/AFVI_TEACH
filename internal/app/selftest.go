@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/core"
 )
 
 // Selftest drives the app through every tab, theme and language, waits until background

@@ -9,10 +9,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Always run from the script's own directory.
-Set-Location -LiteralPath $PSScriptRoot
+# Always run from the project root (this script lives in scripts/).
+$Root = Split-Path -Parent $PSScriptRoot
+Set-Location -LiteralPath $Root
 # $PSScriptRoot is empty inside param() defaults on Windows PowerShell 5.1, so resolve here.
-if ($Out -eq '') { $Out = Join-Path $PSScriptRoot 'selftest-out' }
+if ($Out -eq '') { $Out = Join-Path $Root 'selftest-out' }
 
 # --- Toolchain: MinGW-w64 (gcc) is required for cgo. -------------------------
 $mingwBin = Join-Path $env:USERPROFILE 'scoop\apps\mingw\current\bin'
@@ -29,8 +30,8 @@ if ($Offline) {
 }
 
 # --- 1. gofmt ----------------------------------------------------------------
-Write-Host '==> gofmt -l .'
-$unformatted = & gofmt -l .
+Write-Host '==> gofmt -l cmd internal'
+$unformatted = & gofmt -l cmd internal
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'gofmt failed to run.'
     exit 1
@@ -49,23 +50,27 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# --- 3. core tests (pure Go, CGO_ENABLED has no effect) ----------------------
-Write-Host '==> go test ./core/...'
-& go test ./core/...
+# --- 3. config and core tests (pure Go, CGO_ENABLED has no effect) -----------
+Write-Host '==> go test ./internal/config/... ./internal/core/...'
+& go test ./internal/config/... ./internal/core/...
 if ($LASTEXITCODE -ne 0) {
-    Write-Error 'go test ./core/... failed.'
+    Write-Error 'go test ./internal/config/... ./internal/core/... failed.'
     exit 1
 }
 
 # --- 4. build ----------------------------------------------------------------
 Write-Host '==> go build'
-& go build -ldflags "-s -w -extldflags=-static" -o teach-imgui.exe .
+$binDir = Join-Path $Root 'bin'
+if (-not (Test-Path -LiteralPath $binDir)) {
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+}
+& go build -ldflags "-s -w -extldflags=-static" -o bin\teach-imgui.exe ./cmd/teach-imgui
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'go build failed.'
     exit 1
 }
 
-$exe = Join-Path $PSScriptRoot 'teach-imgui.exe'
+$exe = Join-Path $Root 'bin\teach-imgui.exe'
 $sizeMB = [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 2)
 Write-Host ("Built {0} ({1} MB)" -f $exe, $sizeMB)
 

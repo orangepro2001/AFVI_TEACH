@@ -44,7 +44,7 @@ bm  = '../reference/BM'     # BM 数据根目录
 
 ### 相对路径规则
 
-相对路径以 `afvi.toml` 所在目录为基准解析。例如 `afvi.toml` 位于 `teach-imgui/`，则 `'../reference/FM1'` 指向项目根目录下的 `reference/FM1`。
+相对路径以 `afvi.toml` 所在目录为基准解析。例如 `afvi.toml` 位于 `bin/` 或 `configs/`（距项目根目录一级），则 `'../reference/FM1'` 指向项目根目录下的 `reference/FM1`；位于项目根目录时写 `'reference/FM1'`。
 
 ### 模拟机台 REFERENCE
 
@@ -82,9 +82,11 @@ reference/
 复制示例文件并修改：
 
 ```bash
-cp teach-imgui/afvi.example.toml teach-imgui/afvi.toml
+cp configs/afvi.example.toml bin/afvi.toml
 # 编辑 afvi.toml，填写机台名称、地址与 FM1/FM2/BM 路径
 ```
+
+也可以把 `afvi.toml` 放在项目根目录（从该目录启动应用时会被找到），此时需把相对路径改为 `'reference/...'`。
 
 ### 方法 2：环境变量
 
@@ -138,7 +140,7 @@ New-Item -ItemType SymbolicLink -Path C:\dev\AFVI_TEACH\reference -Target C:\pat
 
 **Windows 运行时：**
 ```
-teach-imgui/
+bin/
 ├── teach-imgui.exe
 └── reference/
     ├── FM1/

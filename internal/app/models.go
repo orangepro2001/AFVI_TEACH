@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"errors"
@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"afvi/teach-imgui/config"
-	"afvi/teach-imgui/core"
+	"afvi/teach-imgui/internal/config"
+	"afvi/teach-imgui/internal/core"
 )
 
 // Sentinel errors returned by CheckHostPath.
