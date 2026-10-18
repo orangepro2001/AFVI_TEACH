@@ -1,0 +1,44 @@
+# AFVI Teach machine configuration (example).
+#
+# Copy this file to "afvi.toml" next to the executable (or pass -config <file>) and
+# adjust the machines. The real afvi.toml is git-ignored because it holds machine
+# addresses and local paths.
+#
+# Search order: -config flag, AFVI_CONFIG environment variable, afvi.toml next to the
+# executable, afvi.toml in the working directory.
+#
+# Paths may be absolute (D:\FM1), UNC (\\server\share\FM1) or relative to this file.
+# Use single quotes for Windows paths so backslashes are taken literally.
+
+# Machine selected at startup (must match a [[machine]] name).
+active = "REFERENCE"
+
+# UI theme: "light" (classic, default) or "dark".
+theme = "light"
+
+# UI language: "zh", "en" or "ko".
+lang = "zh"
+
+# The simulated machine: reads the local reference directory next to this file.
+[[machine]]
+name = "REFERENCE"
+address = "localhost"
+fm1 = '../reference/FM1'
+fm2 = '../reference/FM2'
+bm = '../reference/BM'
+
+# A remote machine reached over the network (UNC paths).
+[[machine]]
+name = "AFVI-01"
+address = "192.168.10.21"
+fm1 = '\\192.168.10.21\AFVI\FM1'
+fm2 = '\\192.168.10.21\AFVI\FM2'
+bm = '\\192.168.10.21\AFVI\BM'
+
+# A remote machine with a mapped network drive.
+[[machine]]
+name = "AFVI-02"
+address = "192.168.10.22"
+fm1 = 'Z:\FM1'
+fm2 = 'Z:\FM2'
+bm = 'Z:\BM'

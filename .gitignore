@@ -1,0 +1,42 @@
+# Binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Reference data (machine-specific test data)
+reference/
+
+# Machine configuration (holds machine addresses and local paths)
+afvi.toml
+teach-imgui/afvi.toml
+
+# Build outputs
+teach-imgui/teach-imgui.exe
+teach-imgui-spike/teach-imgui-spike.exe
+
+# Self-test outputs
+selftest-out/
+selftest-output/
+*-metrics.json
+*.png
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
