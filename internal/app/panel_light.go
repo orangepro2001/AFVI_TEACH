@@ -135,6 +135,16 @@ type LightPanel struct {
 func (p *LightPanel) ID() string    { return "light" }
 func (p *LightPanel) Title() string { return T("tab.light") }
 
+// PaletteSupports: the measure rectangle is the light panel's only tool and is always active.
+func (p *LightPanel) PaletteSupports(t PaletteTool) bool { return t == PaletteRect }
+
+// PaletteTool always reports the measure rectangle as the active tool.
+func (p *LightPanel) PaletteTool() PaletteTool { return PaletteRect }
+
+// SetPaletteTool is a no-op: the measure rectangle cannot be turned off, so clicking the
+// palette button must not change the panel's behaviour.
+func (p *LightPanel) SetPaletteTool(t PaletteTool) {}
+
 func (p *LightPanel) Activate() {
 	p.active = true
 	p.requestRender()

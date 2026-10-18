@@ -331,6 +331,39 @@ type AlignPanel struct {
 func (p *AlignPanel) ID() string    { return "align" }
 func (p *AlignPanel) Title() string { return T("tab.align") }
 
+// PaletteSupports: the align panel uses the pick (select/move) and rect (ROI/occlusion) tools.
+func (p *AlignPanel) PaletteSupports(t PaletteTool) bool {
+	return t == PalettePick || t == PaletteRect
+}
+
+// PaletteTool maps the panel's internal tool string to a palette tool.
+func (p *AlignPanel) PaletteTool() PaletteTool {
+	switch p.tool {
+	case "select":
+		return PalettePick
+	case "roi", "occlusion":
+		return PaletteRect
+	}
+	return PaletteNone
+}
+
+// SetPaletteTool mirrors the left-panel tool buttons: pick selects/moves ROIs, rect keeps
+// the current ROI/occlusion mode (defaulting to ROI), none returns to pan.
+func (p *AlignPanel) SetPaletteTool(t PaletteTool) {
+	switch t {
+	case PalettePick:
+		p.tool = "select"
+		p.a.SetHint(T("align.roi.selectHint"))
+	case PaletteRect:
+		if p.tool != "roi" && p.tool != "occlusion" {
+			p.tool = "roi"
+			p.a.SetHint(T("align.roi.newHint"))
+		}
+	case PaletteNone:
+		p.tool = "none"
+	}
+}
+
 func (p *AlignPanel) Activate() {
 	p.active = true
 	if p.dirty || p.template == nil {

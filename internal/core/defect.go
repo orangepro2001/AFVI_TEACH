@@ -1,10 +1,7 @@
 package core
 
 import (
-	"fmt"
 	"math"
-	"sort"
-	"strconv"
 )
 
 // DefectKind 是缺陷类型。
@@ -24,6 +21,8 @@ const (
 	ShapeSpot DefectShape = iota
 	ShapeLine
 	ShapeRect
+	ShapeEllipse
+	ShapePolygon
 )
 
 // DefectAmplitude 是幅度模式。
@@ -63,6 +62,34 @@ type DefectStroke struct {
 	Profile      DefectProfile
 	Grain        float64
 	Seed         uint32
+	// Points 是多边形顶点（图像坐标，隐式闭合），仅 ShapePolygon 使用。
+	Points []Point
+	// HasColor 为 true 时按 Color 对相机通道加权。
+	HasColor bool
+	// Color 是 [R,G,B] 通道权重，索引为 CameraChannel，取值 0..1。
+	Color [3]float64
+}
+
+// ChannelFactor 返回该笔画在指定相机通道上的权重因子。
+// 未设置颜色时返回 1；否则返回 Color[ch] 并钳到 [0,1]（NaN→0，越界 ch→1）。
+func (s DefectStroke) ChannelFactor(ch CameraChannel) float64 {
+	if !s.HasColor {
+		return 1
+	}
+	if ch < 0 || int(ch) >= len(s.Color) {
+		return 1
+	}
+	v := s.Color[ch]
+	if math.IsNaN(v) {
+		return 0
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }
 
 // SceneMode 是场景笔画模式。
@@ -83,45 +110,6 @@ type SceneStroke struct {
 	Factor               float64
 }
 
-// DefectParams 是缺陷检测参数。
-type DefectParams struct {
-	BrightTh, DarkTh                          float64
-	BrightMinSize, DarkMinSize, MinDefectSize int
-	BrightRelPct, DarkRelPct                  float64
-}
-
-// DefaultDefectParams 是默认检测参数。
-var DefaultDefectParams = DefectParams{BrightTh: 30, DarkTh: 30, BrightMinSize: 10, DarkMinSize: 10, MinDefectSize: 1}
-
-// DefectBlob 是缺陷连通域。
-type DefectBlob struct {
-	Kind                      DefectKind
-	Area                      int
-	BBox                      Rect
-	Centroid                  Point
-	PeakDelta, MeanDelta      float64
-	Detected                  bool
-	Rule                      string
-	RejectReason              string
-	GoldenMean, ThresholdMean float64
-	SaturatedPixels           int
-}
-
-// DefectRegionStats 是区域统计。
-type DefectRegionStats struct {
-	Pixels                                                                       int
-	GoldenMean                                                                   float64
-	GoldenSaturatedHigh, GoldenSaturatedLow, TestSaturatedHigh, TestSaturatedLow int
-}
-
-// DefectReport 是缺陷检测报告。
-type DefectReport struct {
-	Blobs                              []DefectBlob
-	DetectedCount, RejectedCount       int
-	SimulatedParams, UnsimulatedParams []string
-	RegionStats                        DefectRegionStats
-}
-
 // SensorNoise 是传感器噪声参数。
 type SensorNoise struct {
 	ReadSigma, ShotGain float64
@@ -130,19 +118,6 @@ type SensorNoise struct {
 
 // NoNoise 是无噪声设置。
 var NoNoise = SensorNoise{Seed: 1}
-
-// ProbeReport 是探测报告。
-type ProbeReport struct {
-	Pixels                                                   int
-	MaxBright, MaxDark                                       float64
-	BrightPixels, DarkPixels, LargestBright, LargestDark     int
-	RequiredBright, RequiredDark                             int
-	WouldDetectBright, WouldDetectDark                       bool
-	GoldenMean                                               float64
-	GoldenMin, GoldenMax                                     int
-	BrightThMin, BrightThMax, DarkThMin, DarkThMax           float64
-	GoldenSaturatedHigh, TestSaturatedHigh, TestSaturatedLow int
-}
 
 // RandomShape 是随机形状模式。
 type RandomShape uint8
@@ -177,14 +152,10 @@ type RandomDefectOptions struct {
 	Softness, Grain, LineLengthMax           float64
 	Material                                 []uint8
 	Materials                                []uint8
-}
-
-// EffectiveThreshold 计算有效阈值。
-func EffectiveThreshold(kind DefectKind, goldenGv float64, p DefectParams) float64 {
-	if kind == Bright {
-		return p.BrightTh + (goldenGv*p.BrightRelPct)/100
-	}
-	return p.DarkTh + (goldenGv*p.DarkRelPct)/100
+	// HasColor 为 true 时把 Color 复制到每个生成的笔画。
+	HasColor bool
+	// Color 是 [R,G,B] 通道权重。
+	Color [3]float64
 }
 
 func distanceToShape(x, y float64, shape DefectShape, sx, sy, x2, y2 float64) float64 {
@@ -257,6 +228,138 @@ func shapeBounds(shape DefectShape, x, y, x2, y2, radius float64) Rect {
 	return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
 }
 
+// strokeEnd 返回笔画用于扫描的第二个端点；Spot 与 Polygon 使用 (X,Y)。
+func strokeEnd(s DefectStroke) (x2, y2 float64) {
+	if s.Shape == ShapeLine || s.Shape == ShapeRect || s.Shape == ShapeEllipse {
+		return s.X2, s.Y2
+	}
+	return s.X, s.Y
+}
+
+// strokeBounds 返回笔画的整数扫描包围盒来源。
+// 椭圆使用角点盒（同矩形）；多边形使用顶点 min/max（空则零矩形）；其余委托 shapeBounds。
+func strokeBounds(s DefectStroke) Rect {
+	if s.Shape == ShapeEllipse {
+		minX := math.Min(s.X, s.X2)
+		maxX := math.Max(s.X, s.X2)
+		minY := math.Min(s.Y, s.Y2)
+		maxY := math.Max(s.Y, s.Y2)
+		return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
+	}
+	if s.Shape == ShapePolygon {
+		if len(s.Points) == 0 {
+			return Rect{}
+		}
+		minX := s.Points[0].X
+		maxX := s.Points[0].X
+		minY := s.Points[0].Y
+		maxY := s.Points[0].Y
+		for _, p := range s.Points[1:] {
+			if p.X < minX {
+				minX = p.X
+			}
+			if p.X > maxX {
+				maxX = p.X
+			}
+			if p.Y < minY {
+				minY = p.Y
+			}
+			if p.Y > maxY {
+				maxY = p.Y
+			}
+		}
+		return Rect{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
+	}
+	x2, y2 := strokeEnd(s)
+	return shapeBounds(s.Shape, s.X, s.Y, x2, y2, s.Radius)
+}
+
+// ellipseWeight 计算椭圆权重；X,Y,X2,Y2 为包围盒对角点，Radius 忽略。
+func ellipseWeight(s DefectStroke, x, y float64) float64 {
+	cx := (s.X + s.X2) / 2
+	cy := (s.Y + s.Y2) / 2
+	rx := math.Abs(s.X2-s.X) / 2
+	ry := math.Abs(s.Y2-s.Y) / 2
+	if rx == 0 || ry == 0 {
+		return 0
+	}
+	dx := (x - cx) / rx
+	dy := (y - cy) / ry
+	q := math.Sqrt(dx*dx + dy*dy)
+	return shapeWeight(q, 1, s.Softness)
+}
+
+// pointInPolygon 使用奇偶射线法判断点是否在多边形内。
+func pointInPolygon(px, py float64, pts []Point) bool {
+	inside := false
+	n := len(pts)
+	j := n - 1
+	for i := 0; i < n; i++ {
+		xi := pts[i].X
+		yi := pts[i].Y
+		xj := pts[j].X
+		yj := pts[j].Y
+		if (yi > py) != (yj > py) {
+			xCross := (xj-xi)*(py-yi)/(yj-yi) + xi
+			if px < xCross {
+				inside = !inside
+			}
+		}
+		j = i
+	}
+	return inside
+}
+
+// distanceToSegment 返回点到线段的最短距离。
+func distanceToSegment(px, py, ax, ay, bx, by float64) float64 {
+	vx := bx - ax
+	vy := by - ay
+	lenSq := vx*vx + vy*vy
+	if lenSq == 0 {
+		return math.Hypot(px-ax, py-ay)
+	}
+	t := ((px-ax)*vx + (py-ay)*vy) / lenSq
+	if t < 0 {
+		t = 0
+	} else if t > 1 {
+		t = 1
+	}
+	return math.Hypot(px-(ax+t*vx), py-(ay+t*vy))
+}
+
+// polygonWeight 计算多边形权重；X,Y,X2,Y2,Radius 忽略。
+func polygonWeight(s DefectStroke, x, y float64) float64 {
+	pts := s.Points
+	if len(pts) < 3 {
+		return 0
+	}
+	if !pointInPolygon(x, y, pts) {
+		return 0
+	}
+	if s.Softness <= 0 {
+		return 1
+	}
+	b := strokeBounds(s)
+	feather := s.Softness * math.Max(0.5, math.Min(b.W, b.H)/2)
+	if feather <= 0 {
+		return 1
+	}
+	depth := math.Inf(1)
+	n := len(pts)
+	j := n - 1
+	for i := 0; i < n; i++ {
+		d := distanceToSegment(x, y, pts[j].X, pts[j].Y, pts[i].X, pts[i].Y)
+		if d < depth {
+			depth = d
+		}
+		j = i
+	}
+	if depth >= feather {
+		return 1
+	}
+	return depth / feather
+}
+
 func hashGrain(x, y int, seed uint32) float64 {
 	h := uint32(int32(x))*0x27d4eb2d ^ uint32(int32(y))*0x165667b1 ^ seed*0x9e3779b9
 	h = (h ^ (h >> 15)) * 0x85ebca6b
@@ -281,13 +384,18 @@ func applyProfile(lw float64, profile DefectProfile) float64 {
 
 func strokeWeight(stroke DefectStroke, x, y, x2, y2 float64) float64 {
 	var lw float64
-	if stroke.Shape == ShapeRect {
+	switch stroke.Shape {
+	case ShapeRect:
 		minX := math.Min(stroke.X, x2)
 		maxX := math.Max(stroke.X, x2)
 		minY := math.Min(stroke.Y, y2)
 		maxY := math.Max(stroke.Y, y2)
 		lw = rectWeight(x, y, minX, maxX, minY, maxY, stroke.Softness)
-	} else {
+	case ShapeEllipse:
+		lw = ellipseWeight(stroke, x, y)
+	case ShapePolygon:
+		lw = polygonWeight(stroke, x, y)
+	default:
 		d := distanceToShape(x, y, stroke.Shape, stroke.X, stroke.Y, x2, y2)
 		lw = shapeWeight(d, stroke.Radius, stroke.Softness)
 	}
@@ -337,15 +445,8 @@ func PaintDefects(img *GrayImage, strokes []DefectStroke) *GrayImage {
 	height := img.Height
 	touched := make(map[int]float64)
 	for _, stroke := range strokes {
-		x2 := stroke.X2
-		if stroke.Shape != ShapeLine && stroke.Shape != ShapeRect {
-			x2 = stroke.X
-		}
-		y2 := stroke.Y2
-		if stroke.Shape != ShapeLine && stroke.Shape != ShapeRect {
-			y2 = stroke.Y
-		}
-		bounds := shapeBounds(stroke.Shape, stroke.X, stroke.Y, x2, y2, stroke.Radius)
+		x2, y2 := strokeEnd(stroke)
+		bounds := strokeBounds(stroke)
 		x0 := int(math.Max(0, math.Floor(bounds.X)))
 		y0 := int(math.Max(0, math.Floor(bounds.Y)))
 		x1 := int(math.Min(float64(width), math.Floor(bounds.X+bounds.W)+1))
@@ -444,22 +545,20 @@ func RenderDefectPair(scene *LightScene, s *LightSetting, ch CameraChannel, scen
 	n := len(painted.Material)
 	touched := make(map[int]float64)
 	for _, stroke := range gvStrokes {
-		x2 := stroke.X2
-		if stroke.Shape != ShapeLine && stroke.Shape != ShapeRect {
-			x2 = stroke.X
-		}
-		y2 := stroke.Y2
-		if stroke.Shape != ShapeLine && stroke.Shape != ShapeRect {
-			y2 = stroke.Y
-		}
-		bounds := shapeBounds(stroke.Shape, stroke.X, stroke.Y, x2, y2, stroke.Radius)
+		x2, y2 := strokeEnd(stroke)
+		bounds := strokeBounds(stroke)
 		x0 := int(math.Max(0, math.Floor(bounds.X)))
 		y0 := int(math.Max(0, math.Floor(bounds.Y)))
 		x1 := int(math.Min(float64(painted.Width), math.Floor(bounds.X+bounds.W)+1))
 		y1 := int(math.Min(float64(painted.Height), math.Floor(bounds.Y+bounds.H)+1))
+		cf := stroke.ChannelFactor(ch)
 		for y := y0; y < y1; y++ {
 			for x := x0; x < x1; x++ {
 				w := strokeWeight(stroke, float64(x), float64(y), x2, y2)
+				if w <= 0 {
+					continue
+				}
+				w *= cf
 				if w <= 0 {
 					continue
 				}
@@ -493,444 +592,11 @@ func RenderDefectPair(scene *LightScene, s *LightSetting, ch CameraChannel, scen
 	return golden, test
 }
 
-var paramKeyMap = []struct {
-	key  string
-	dest func(*DefectParams, float64)
-}{
-	{"1000", func(p *DefectParams, v float64) { p.BrightTh = v }},
-	{"1002", func(p *DefectParams, v float64) { p.BrightMinSize = int(v) }},
-	{"1009", func(p *DefectParams, v float64) { p.DarkTh = v }},
-	{"1011", func(p *DefectParams, v float64) { p.DarkMinSize = int(v) }},
-	{"1024", func(p *DefectParams, v float64) { p.MinDefectSize = int(v) }},
-}
-
-// DefectParamsFromInspection 从检测参数映射构建参数。
-func DefectParamsFromInspection(values map[string]float64) (DefectParams, []string) {
-	params := DefaultDefectParams
-	var missing []string
-	for _, entry := range paramKeyMap {
-		value, ok := values[entry.key]
-		if !ok {
-			missing = append(missing, entry.key)
-		} else {
-			entry.dest(&params, value)
-		}
-	}
-	return params, missing
-}
-
-var simulatedParams = []string{
-	"Bright Defect(TH)",
-	"Bright Defect Size(Pixel)",
-	"Dark Defect(TH)",
-	"Dark Defect Size(Pixel)",
-	"Min Defect Size(Pixel)",
-	"Bright Relative TH (% of Golden) [teaching]",
-	"Dark Relative TH (% of Golden) [teaching]",
-}
-
-var unsimulatedParams = []string{
-	"Bright Defect Margine(TH)",
-	"Bright Defect Offest1(%)",
-	"Bright Defect Offest2(TH)",
-	"Bright Defect Pad Offest(TH)",
-	"Dark Defect Margine(TH)",
-	"Dark Defect Offset1(%)",
-	"Dark Defect Offset2(TH)",
-	"Dark Defect Pad Offset(TH)",
-	"Block Bright Defect Offset(TH)",
-	"Block Dark Offset(TH)",
-}
-
-type blobAccumulator struct {
-	kind         DefectKind
-	area         int
-	minX, minY   int
-	maxX, maxY   int
-	sumX, sumY   float64
-	peak         float64
-	sumDelta     float64
-	sumGolden    float64
-	sumThreshold float64
-	saturated    int
-}
-
-func collectBlobs(diff []int16, golden, test []uint8, width, height int, region []uint8, kind DefectKind, params DefectParams) []blobAccumulator {
-	visited := make([]uint8, width*height)
-	var blobs []blobAccumulator
-	stack := make([]int, 0, 64)
-	isCandidate := func(idx int) bool {
-		if region != nil && region[idx] == 0 {
-			return false
-		}
-		d := float64(diff[idx])
-		th := EffectiveThreshold(kind, float64(golden[idx]), params)
-		if kind == Bright {
-			return d >= th
-		}
-		return -d >= th
-	}
-	for start := 0; start < width*height; start++ {
-		if visited[start] != 0 || !isCandidate(start) {
-			continue
-		}
-		blob := blobAccumulator{
-			kind: kind,
-			minX: width,
-			minY: height,
-			maxX: -1,
-			maxY: -1,
-		}
-		stack = stack[:0]
-		stack = append(stack, start)
-		visited[start] = 1
-		for len(stack) > 0 {
-			idx := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			x := idx % width
-			y := (idx - x) / width
-			delta := math.Abs(float64(diff[idx]))
-			blob.area++
-			blob.sumX += float64(x)
-			blob.sumY += float64(y)
-			blob.sumDelta += delta
-			blob.sumGolden += float64(golden[idx])
-			blob.sumThreshold += EffectiveThreshold(kind, float64(golden[idx]), params)
-			if kind == Bright {
-				if test[idx] == 255 {
-					blob.saturated++
-				}
-			} else {
-				if test[idx] == 0 {
-					blob.saturated++
-				}
-			}
-			if delta > blob.peak {
-				blob.peak = delta
-			}
-			if x < blob.minX {
-				blob.minX = x
-			}
-			if y < blob.minY {
-				blob.minY = y
-			}
-			if x > blob.maxX {
-				blob.maxX = x
-			}
-			if y > blob.maxY {
-				blob.maxY = y
-			}
-			for dy := -1; dy <= 1; dy++ {
-				ny := y + dy
-				if ny < 0 || ny >= height {
-					continue
-				}
-				for dx := -1; dx <= 1; dx++ {
-					if dx == 0 && dy == 0 {
-						continue
-					}
-					nx := x + dx
-					if nx < 0 || nx >= width {
-						continue
-					}
-					nIdx := ny*width + nx
-					if visited[nIdx] != 0 || !isCandidate(nIdx) {
-						continue
-					}
-					visited[nIdx] = 1
-					stack = append(stack, nIdx)
-				}
-			}
-		}
-		blobs = append(blobs, blob)
-	}
-	return blobs
-}
-
-func formatFloat(v float64) string {
-	return strconv.FormatFloat(v, 'f', -1, 64)
-}
-
-// DetectDefects 检测缺陷。
-func DetectDefects(golden, test *GrayImage, p DefectParams, region []uint8) (DefectReport, error) {
-	var report DefectReport
-	if golden.Width != test.Width || golden.Height != test.Height {
-		return report, fmt.Errorf("DetectDefects: image sizes must match")
-	}
-	width := golden.Width
-	height := golden.Height
-	n := width * height
-	if region != nil && len(region) != n {
-		return report, fmt.Errorf("DetectDefects: region size mismatch")
-	}
-	diff := make([]int16, n)
-	for i := 0; i < n; i++ {
-		diff[i] = int16(test.Data[i]) - int16(golden.Data[i])
-	}
-
-	brightBlobs := collectBlobs(diff, golden.Data, test.Data, width, height, region, Bright, p)
-	darkBlobs := collectBlobs(diff, golden.Data, test.Data, width, height, region, Dark, p)
-
-	blobs := make([]DefectBlob, 0, len(brightBlobs)+len(darkBlobs))
-	build := func(acc blobAccumulator) DefectBlob {
-		minSize := p.DarkMinSize
-		if acc.kind == Bright {
-			minSize = p.BrightMinSize
-		}
-		required := minSize
-		if p.MinDefectSize > required {
-			required = p.MinDefectSize
-		}
-		detected := acc.area >= required
-		relPct := p.DarkRelPct
-		baseTh := p.DarkTh
-		if acc.kind == Bright {
-			relPct = p.BrightRelPct
-			baseTh = p.BrightTh
-		}
-		var rule string
-		if relPct > 0 {
-			if acc.kind == Bright {
-				rule = "Bright Defect(TH)=" + formatFloat(baseTh) + " + " + formatFloat(relPct) + "%×Golden, Bright Defect Size(Pixel)>=" + strconv.Itoa(required)
-			} else {
-				rule = "Dark Defect(TH)=" + formatFloat(baseTh) + " + " + formatFloat(relPct) + "%×Golden, Dark Defect Size(Pixel)>=" + strconv.Itoa(required)
-			}
-		} else {
-			if acc.kind == Bright {
-				rule = "Bright Defect(TH)=" + formatFloat(baseTh) + ", Bright Defect Size(Pixel)>=" + strconv.Itoa(required)
-			} else {
-				rule = "Dark Defect(TH)=" + formatFloat(baseTh) + ", Dark Defect Size(Pixel)>=" + strconv.Itoa(required)
-			}
-		}
-		rejectReason := ""
-		if !detected {
-			rejectReason = "below-size"
-		}
-		return DefectBlob{
-			Kind:            acc.kind,
-			Area:            acc.area,
-			BBox:            Rect{X: float64(acc.minX), Y: float64(acc.minY), W: float64(acc.maxX - acc.minX + 1), H: float64(acc.maxY - acc.minY + 1)},
-			Centroid:        Point{X: acc.sumX / float64(acc.area), Y: acc.sumY / float64(acc.area)},
-			PeakDelta:       acc.peak,
-			MeanDelta:       acc.sumDelta / float64(acc.area),
-			Detected:        detected,
-			Rule:            rule,
-			RejectReason:    rejectReason,
-			GoldenMean:      acc.sumGolden / float64(acc.area),
-			ThresholdMean:   acc.sumThreshold / float64(acc.area),
-			SaturatedPixels: acc.saturated,
-		}
-	}
-	for _, acc := range brightBlobs {
-		blobs = append(blobs, build(acc))
-	}
-	for _, acc := range darkBlobs {
-		blobs = append(blobs, build(acc))
-	}
-	sort.SliceStable(blobs, func(i, j int) bool {
-		return blobs[i].Area > blobs[j].Area
-	})
-
-	detectedCount := 0
-	rejectedCount := 0
-	for _, blob := range blobs {
-		if blob.Detected {
-			detectedCount++
-		} else {
-			rejectedCount++
-		}
-	}
-
-	regionStats := DefectRegionStats{}
-	goldenSum := 0.0
-	for i := 0; i < n; i++ {
-		if region != nil && region[i] == 0 {
-			continue
-		}
-		regionStats.Pixels++
-		goldenSum += float64(golden.Data[i])
-		if golden.Data[i] == 255 {
-			regionStats.GoldenSaturatedHigh++
-		}
-		if golden.Data[i] == 0 {
-			regionStats.GoldenSaturatedLow++
-		}
-		if test.Data[i] == 255 {
-			regionStats.TestSaturatedHigh++
-		}
-		if test.Data[i] == 0 {
-			regionStats.TestSaturatedLow++
-		}
-	}
-	if regionStats.Pixels > 0 {
-		regionStats.GoldenMean = goldenSum / float64(regionStats.Pixels)
-	}
-
-	report.Blobs = blobs
-	report.DetectedCount = detectedCount
-	report.RejectedCount = rejectedCount
-	report.SimulatedParams = append([]string{}, simulatedParams...)
-	report.UnsimulatedParams = append([]string{}, unsimulatedParams...)
-	report.RegionStats = regionStats
-	return report, nil
-}
-
-func largestComponent(mask []uint8, width, height, x0, y0, x1, y1 int) int {
-	visited := make([]uint8, width*height)
-	stack := make([]int, 0, 64)
-	largest := 0
-	for sy := y0; sy < y1; sy++ {
-		for sx := x0; sx < x1; sx++ {
-			start := sy*width + sx
-			if visited[start] != 0 || mask[start] == 0 {
-				continue
-			}
-			area := 0
-			stack = stack[:0]
-			stack = append(stack, start)
-			visited[start] = 1
-			for len(stack) > 0 {
-				idx := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				x := idx % width
-				y := (idx - x) / width
-				area++
-				for dy := -1; dy <= 1; dy++ {
-					ny := y + dy
-					if ny < y0 || ny >= y1 {
-						continue
-					}
-					for dx := -1; dx <= 1; dx++ {
-						if dx == 0 && dy == 0 {
-							continue
-						}
-						nx := x + dx
-						if nx < x0 || nx >= x1 {
-							continue
-						}
-						nIdx := ny*width + nx
-						if visited[nIdx] != 0 || mask[nIdx] == 0 {
-							continue
-						}
-						visited[nIdx] = 1
-						stack = append(stack, nIdx)
-					}
-				}
-			}
-			if area > largest {
-				largest = area
-			}
-		}
-	}
-	return largest
-}
-
-// ProbeArea 探测矩形区域内的缺陷。
-func ProbeArea(golden, test *GrayImage, r Rect, p DefectParams, region []uint8) (ProbeReport, error) {
-	var report ProbeReport
-	if golden.Width != test.Width || golden.Height != test.Height {
-		return report, fmt.Errorf("ProbeArea: image sizes must match")
-	}
-	width := golden.Width
-	height := golden.Height
-	x0 := int(math.Max(0, math.Floor(r.X)))
-	y0 := int(math.Max(0, math.Floor(r.Y)))
-	x1 := int(math.Min(float64(width), math.Ceil(r.X+r.W)))
-	y1 := int(math.Min(float64(height), math.Ceil(r.Y+r.H)))
-	requiredBright := p.BrightMinSize
-	if p.MinDefectSize > requiredBright {
-		requiredBright = p.MinDefectSize
-	}
-	requiredDark := p.DarkMinSize
-	if p.MinDefectSize > requiredDark {
-		requiredDark = p.MinDefectSize
-	}
-	report.RequiredBright = requiredBright
-	report.RequiredDark = requiredDark
-	if x1 <= x0 || y1 <= y0 {
-		return report, nil
-	}
-	brightMask := make([]uint8, width*height)
-	darkMask := make([]uint8, width*height)
-	goldenSum := 0.0
-	goldenMin := 255
-	goldenMax := 0
-	brightThMin := math.Inf(1)
-	brightThMax := math.Inf(-1)
-	darkThMin := math.Inf(1)
-	darkThMax := math.Inf(-1)
-	for y := y0; y < y1; y++ {
-		row := y * width
-		for x := x0; x < x1; x++ {
-			idx := row + x
-			if region != nil && region[idx] == 0 {
-				continue
-			}
-			g := golden.Data[idx]
-			t := test.Data[idx]
-			d := float64(t) - float64(g)
-			report.Pixels++
-			goldenSum += float64(g)
-			if int(g) < goldenMin {
-				goldenMin = int(g)
-			}
-			if int(g) > goldenMax {
-				goldenMax = int(g)
-			}
-			if g == 255 {
-				report.GoldenSaturatedHigh++
-			}
-			if t == 255 {
-				report.TestSaturatedHigh++
-			}
-			if t == 0 {
-				report.TestSaturatedLow++
-			}
-			bTh := EffectiveThreshold(Bright, float64(g), p)
-			dTh := EffectiveThreshold(Dark, float64(g), p)
-			if bTh < brightThMin {
-				brightThMin = bTh
-			}
-			if bTh > brightThMax {
-				brightThMax = bTh
-			}
-			if dTh < darkThMin {
-				darkThMin = dTh
-			}
-			if dTh > darkThMax {
-				darkThMax = dTh
-			}
-			if d > report.MaxBright {
-				report.MaxBright = d
-			}
-			if -d > report.MaxDark {
-				report.MaxDark = -d
-			}
-			if d >= bTh {
-				report.BrightPixels++
-				brightMask[idx] = 1
-			}
-			if -d >= dTh {
-				report.DarkPixels++
-				darkMask[idx] = 1
-			}
-		}
-	}
-	if report.Pixels == 0 {
-		return report, nil
-	}
-	report.GoldenMean = goldenSum / float64(report.Pixels)
-	report.GoldenMin = goldenMin
-	report.GoldenMax = goldenMax
-	report.BrightThMin = brightThMin
-	report.BrightThMax = brightThMax
-	report.DarkThMin = darkThMin
-	report.DarkThMax = darkThMax
-	report.LargestBright = largestComponent(brightMask, width, height, x0, y0, x1, y1)
-	report.LargestDark = largestComponent(darkMask, width, height, x0, y0, x1, y1)
-	report.WouldDetectBright = report.LargestBright >= requiredBright
-	report.WouldDetectDark = report.LargestDark >= requiredDark
-	return report, nil
+// RenderGoodSample 渲染一张良品图像（不带任何不良笔画），可叠加传感器噪声。
+// 它供教学（学习检出区间）使用，只产生测试图，不产生 golden。
+func RenderGoodSample(scene *LightScene, s *LightSetting, ch CameraChannel, noise SensorNoise) *GrayImage {
+	_, test := RenderDefectPair(scene, s, ch, nil, nil, noise)
+	return test
 }
 
 // GenerateRandomDefects 生成随机缺陷笔画。
@@ -994,6 +660,8 @@ func GenerateRandomDefects(o RandomDefectOptions) []DefectStroke {
 			Profile:   o.Profile,
 			Grain:     o.Grain,
 			Seed:      o.Seed*1000 + uint32(len(out)),
+			HasColor:  o.HasColor,
+			Color:     o.Color,
 		}
 		if shape == ShapeLine {
 			minLen := 2 * radius

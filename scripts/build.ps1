@@ -50,11 +50,11 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-# --- 3. config and core tests (pure Go, CGO_ENABLED has no effect) -----------
-Write-Host '==> go test ./internal/config/... ./internal/core/...'
-& go test ./internal/config/... ./internal/core/...
+# --- 3. config, core and inspect tests (pure Go, CGO_ENABLED has no effect) --
+Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...'
+& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...
 if ($LASTEXITCODE -ne 0) {
-    Write-Error 'go test ./internal/config/... ./internal/core/... failed.'
+    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... failed.'
     exit 1
 }
 
@@ -73,6 +73,20 @@ if ($LASTEXITCODE -ne 0) {
 $exe = Join-Path $Root 'bin\teach-imgui.exe'
 $sizeMB = [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 2)
 Write-Host ("Built {0} ({1} MB)" -f $exe, $sizeMB)
+
+# --- 4b. camera (pure Go, no cgo) --------------------------------------------
+Write-Host '==> go build camera (pure Go, no cgo)'
+$env:CGO_ENABLED = '0'
+& go build -ldflags "-s -w" -o bin\camera.exe ./cmd/camera
+$cameraExit = $LASTEXITCODE
+$env:CGO_ENABLED = '1'
+if ($cameraExit -ne 0) {
+    Write-Error 'go build camera failed.'
+    exit 1
+}
+$cameraExe = Join-Path $Root 'bin\camera.exe'
+$cameraSizeMB = [math]::Round((Get-Item -LiteralPath $cameraExe).Length / 1MB, 2)
+Write-Host ("Built {0} ({1} MB)" -f $cameraExe, $cameraSizeMB)
 
 # --- 5. optional self-test ---------------------------------------------------
 if ($Selftest) {

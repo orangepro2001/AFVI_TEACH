@@ -39,6 +39,11 @@ type Panel interface {
 	Selftest()
 }
 
+// DialogPanel is implemented by panels that draw their own floating windows (for example
+// the defect tab's detection-parameter dialog). DrawDialogs runs once per frame, after the
+// main layout, for the active panel only while a model is loaded.
+type DialogPanel interface{ DrawDialogs() }
+
 type panelCtor struct {
 	order int
 	make  func(*App) Panel
@@ -88,6 +93,9 @@ type App struct {
 	tab    int
 
 	theme, appliedTheme string
+
+	// focusView hides the left/right panels so the centre viewer fills the window.
+	focusView bool
 
 	hint      string
 	elapsedMs float64
@@ -295,11 +303,18 @@ func (a *App) Frame() {
 		a.appliedTheme = a.theme
 	}
 	a.drawMenuBar()
+	if imgui.IsKeyPressedBoolV(imgui.KeyF11, false) {
+		a.toggleFocus()
+	}
 
 	vp := imgui.MainViewport()
 	pos, size := vp.Pos(), vp.Size()
 	menuH := imgui.FrameHeight()
-	const toolH, statusH, leftW, rightW = 34, 24, 340, 380
+	const toolH, statusH = 34, 24
+	leftW, rightW := float32(340), float32(380)
+	if a.focusView {
+		leftW, rightW = 0, 0
+	}
 	tabH := imgui.FrameHeight() + 4
 
 	y := pos.Y + menuH
@@ -313,21 +328,30 @@ func (a *App) Frame() {
 	pageMax := imgui.NewVec2(pos.X+size.X-4, pageBottom)
 	innerMin := imgui.NewVec2(pageMin.X+4, pageMin.Y+4)
 	innerMax := imgui.NewVec2(pageMax.X-4, pageMax.Y-4)
-	innerW := innerMax.X - innerMin.X
 	innerH := innerMax.Y - innerMin.Y
 
 	leftMin := imgui.NewVec2(innerMin.X, innerMin.Y)
 	leftMax := imgui.NewVec2(innerMin.X+leftW, innerMax.Y)
 	rightMin := imgui.NewVec2(innerMax.X-rightW, innerMin.Y)
 	rightMax := imgui.NewVec2(innerMax.X, innerMax.Y)
-	viewMin := imgui.NewVec2(innerMin.X+leftW+4, innerMin.Y)
-	viewMax := imgui.NewVec2(innerMax.X-rightW-4, innerMax.Y)
+	viewMin := imgui.NewVec2(innerMin.X+leftW, innerMin.Y)
+	viewMax := imgui.NewVec2(innerMax.X-rightW, innerMax.Y)
+	if leftW > 0 {
+		viewMin.X += 4
+	}
+	if rightW > 0 {
+		viewMax.X -= 4
+	}
 
 	bg := imgui.BackgroundDrawList()
 	FillRect(bg, pos, imgui.NewVec2(pos.X+size.X, pos.Y+size.Y), CurrentPalette().Face)
 	DrawEdge(bg, pageMin, pageMax, EdgeWindow)
-	DrawEdge(bg, imgui.NewVec2(leftMin.X-2, leftMin.Y-2), imgui.NewVec2(leftMax.X+2, leftMax.Y+2), EdgeSunken)
-	DrawEdge(bg, imgui.NewVec2(rightMin.X-2, rightMin.Y-2), imgui.NewVec2(rightMax.X+2, rightMax.Y+2), EdgeSunken)
+	if leftW > 0 {
+		DrawEdge(bg, imgui.NewVec2(leftMin.X-2, leftMin.Y-2), imgui.NewVec2(leftMax.X+2, leftMax.Y+2), EdgeSunken)
+	}
+	if rightW > 0 {
+		DrawEdge(bg, imgui.NewVec2(rightMin.X-2, rightMin.Y-2), imgui.NewVec2(rightMax.X+2, rightMax.Y+2), EdgeSunken)
+	}
 	DrawEdge(bg, imgui.NewVec2(viewMin.X-2, viewMin.Y-2), imgui.NewVec2(viewMax.X+2, viewMax.Y+2), EdgeSunken)
 
 	a.drawToolbar(pos.X, toolbarY, size.X, toolH)
@@ -349,32 +373,42 @@ func (a *App) Frame() {
 	panel := a.ActivePanel()
 	ready := a.Scene != nil && panel != nil
 
-	place(leftMin.X, leftMin.Y, leftW, innerH)
-	imgui.BeginV("##left", nil, fixedWindowFlags())
-	if ready {
-		panel.DrawLeft()
+	if leftW > 0 {
+		place(leftMin.X, leftMin.Y, leftW, innerH)
+		imgui.BeginV("##left", nil, fixedWindowFlags())
+		if ready {
+			panel.DrawLeft()
+		}
+		imgui.End()
 	}
-	imgui.End()
 
-	place(rightMin.X, rightMin.Y, rightW, innerH)
-	imgui.BeginV("##right", nil, fixedWindowFlags())
-	if ready {
-		panel.DrawRight()
+	if rightW > 0 {
+		place(rightMin.X, rightMin.Y, rightW, innerH)
+		imgui.BeginV("##right", nil, fixedWindowFlags())
+		if ready {
+			panel.DrawRight()
+		}
+		imgui.End()
 	}
-	imgui.End()
 
-	place(viewMin.X, viewMin.Y, innerW-leftW-rightW-8, innerH)
+	place(viewMin.X, viewMin.Y, viewMax.X-viewMin.X, innerH)
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
 	imgui.BeginV("##viewer", nil, fixedWindowFlags()|imgui.WindowFlagsNoScrollbar|imgui.WindowFlagsNoScrollWithMouse)
 	imgui.PopStyleVar()
 	if ready {
 		a.Viewer.Draw(panel.Overlay, panel.Pointer)
+		a.drawPalette(panel)
 	} else {
 		a.drawCenterMessage()
 	}
 	imgui.End()
 
 	a.drawStatus(pos.X, pos.Y+size.Y-statusH, size.X, statusH)
+	if ready {
+		if d, ok := panel.(DialogPanel); ok {
+			d.DrawDialogs()
+		}
+	}
 	a.drawConfigDialog()
 	a.drawAbout()
 }
@@ -403,6 +437,11 @@ func (a *App) drawMenuBar() {
 	}
 	if imgui.BeginMenu(T("menu.view")) {
 		HotText(T("menu.view"), "")
+		if imgui.MenuItemBoolV(T("menu.focus"), "F11", a.focusView, true) {
+			a.toggleFocus()
+		}
+		HotText(T("menu.focus"), "F11")
+		imgui.Separator()
 		if imgui.BeginMenu(T("menu.theme")) {
 			HotText(T("menu.theme"), "")
 			for _, name := range []string{ThemeLight, ThemeDark} {

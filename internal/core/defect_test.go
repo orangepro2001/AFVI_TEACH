@@ -2,6 +2,7 @@ package core
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -79,115 +80,6 @@ func TestPaintDefectsLineWeightFallsOff(t *testing.T) {
 	}
 }
 
-func TestDetectDefectsFindsLargeBrightRejectsTinyDark(t *testing.T) {
-	golden := testCreateGray(60, 60, 100)
-	test := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 20, Y: 20, Radius: 6, DeltaGv: 60, Softness: 0.3},
-		{Kind: Dark, Shape: ShapeSpot, X: 40, Y: 40, Radius: 1.5, DeltaGv: 50, Softness: 0},
-	})
-	report, err := DetectDefects(golden, test, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var bright, dark *DefectBlob
-	for i := range report.Blobs {
-		if report.Blobs[i].Kind == Bright && bright == nil {
-			bright = &report.Blobs[i]
-		}
-		if report.Blobs[i].Kind == Dark && dark == nil {
-			dark = &report.Blobs[i]
-		}
-	}
-	if bright == nil {
-		t.Fatal("no bright blob")
-	}
-	if !bright.Detected {
-		t.Fatal("bright not detected")
-	}
-	if dark == nil {
-		t.Fatal("no dark blob")
-	}
-	if dark.Detected {
-		t.Fatal("dark should not be detected")
-	}
-	if dark.RejectReason != "below-size" {
-		t.Fatalf("rejectReason=%q", dark.RejectReason)
-	}
-}
-
-func TestDetectDefectsIgnoresOutsideRegion(t *testing.T) {
-	golden := testCreateGray(40, 40, 100)
-	test := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 10, Y: 10, Radius: 5, DeltaGv: 80, Softness: 0},
-	})
-	region := make([]uint8, 40*40)
-	for y := 20; y < 40; y++ {
-		for x := 20; x < 40; x++ {
-			region[y*40+x] = 1
-		}
-	}
-	report, err := DetectDefects(golden, test, DefaultDefectParams, region)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.DetectedCount != 0 {
-		t.Fatalf("detectedCount=%d want 0", report.DetectedCount)
-	}
-}
-
-func TestDefectParamsFromInspection(t *testing.T) {
-	params, missing := DefectParamsFromInspection(map[string]float64{"1000": 25, "1002": 8})
-	if params.BrightTh != 25 {
-		t.Fatalf("brightTh=%v", params.BrightTh)
-	}
-	if params.BrightMinSize != 8 {
-		t.Fatalf("brightMinSize=%d", params.BrightMinSize)
-	}
-	if params.DarkTh != DefaultDefectParams.DarkTh {
-		t.Fatalf("darkTh=%v", params.DarkTh)
-	}
-	wantMissing := map[string]bool{"1009": true, "1011": true, "1024": true}
-	if len(missing) != 3 {
-		t.Fatalf("missing=%v", missing)
-	}
-	for _, m := range missing {
-		if !wantMissing[m] {
-			t.Fatalf("unexpected missing %q", m)
-		}
-	}
-}
-
-func TestProbeAreaExplainsMiss(t *testing.T) {
-	golden := testCreateGray(30, 30, 100)
-	test := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 15, Y: 15, Radius: 1, DeltaGv: 40, Softness: 0},
-	})
-	probe, err := ProbeArea(golden, test, Rect{X: 10, Y: 10, W: 10, H: 10}, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if probe.MaxBright < 40 {
-		t.Fatalf("maxBright=%v", probe.MaxBright)
-	}
-	if probe.BrightPixels != 5 {
-		t.Fatalf("brightPixels=%d want 5", probe.BrightPixels)
-	}
-	if probe.WouldDetectBright {
-		t.Fatal("should not detect")
-	}
-
-	test2 := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 15, Y: 15, Radius: 2, DeltaGv: 40, Softness: 0},
-	})
-	probe2, err := ProbeArea(golden, test2, Rect{X: 10, Y: 10, W: 10, H: 10}, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !probe2.WouldDetectBright {
-		t.Fatal("should detect")
-	}
-}
-
 func TestPaintSceneMaterialContrast(t *testing.T) {
 	median := testCreateGray(40, 40, 100)
 	material := make([]uint8, 40*40)
@@ -249,19 +141,6 @@ func TestRenderDefectPairPaintsBeforeClamping(t *testing.T) {
 	if test.Data[20*40+20] != 255 {
 		t.Fatalf("test=%d want 255", test.Data[20*40+20])
 	}
-	report, err := DetectDefects(golden, test, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	darkCount := 0
-	for _, b := range report.Blobs {
-		if b.Kind == Dark {
-			darkCount++
-		}
-	}
-	if darkCount != 0 {
-		t.Fatalf("darkCount=%d want 0", darkCount)
-	}
 }
 
 func TestRelativeAmplitudeScalesWithIllumination(t *testing.T) {
@@ -316,90 +195,7 @@ func TestPaintSceneLineFollowsSecondEndpoint(t *testing.T) {
 	}
 }
 
-func TestRelativeThresholdRaisesWithBackground(t *testing.T) {
-	golden := testCreateGray(40, 40, 200)
-	test := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 20, Y: 20, Radius: 6, DeltaGv: 40, Softness: 0},
-	})
-	base, err := DetectDefects(golden, test, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, b := range base.Blobs {
-		if b.Kind == Bright && b.Detected {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("base should detect bright")
-	}
-
-	relParams := DefaultDefectParams
-	relParams.BrightRelPct = 10
-	rel, err := DetectDefects(golden, test, relParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, b := range rel.Blobs {
-		if b.Kind == Bright && b.Detected {
-			t.Fatal("rel should not detect bright")
-		}
-	}
-
-	darkGolden := testCreateGray(40, 40, 50)
-	darkTest := PaintDefects(darkGolden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 20, Y: 20, Radius: 6, DeltaGv: 40, Softness: 0},
-	})
-	darkRel, err := DetectDefects(darkGolden, darkTest, relParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found = false
-	for _, b := range darkRel.Blobs {
-		if b.Kind == Bright && b.Detected {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("darkRel should detect bright")
-	}
-}
-
-func TestProbeAreaConnectivityAndRegion(t *testing.T) {
-	golden := testCreateGray(40, 40, 100)
-	test := PaintDefects(golden, []DefectStroke{
-		{Kind: Bright, Shape: ShapeSpot, X: 15, Y: 20, Radius: 1, DeltaGv: 40, Softness: 0},
-		{Kind: Bright, Shape: ShapeSpot, X: 25, Y: 20, Radius: 1, DeltaGv: 40, Softness: 0},
-	})
-	probe, err := ProbeArea(golden, test, Rect{X: 10, Y: 10, W: 20, H: 20}, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if probe.BrightPixels != 10 {
-		t.Fatalf("brightPixels=%d want 10", probe.BrightPixels)
-	}
-	if probe.LargestBright != 5 {
-		t.Fatalf("largestBright=%d want 5", probe.LargestBright)
-	}
-	if probe.WouldDetectBright {
-		t.Fatal("should not detect")
-	}
-
-	region := make([]uint8, 40*40)
-	masked, err := ProbeArea(golden, test, Rect{X: 10, Y: 10, W: 20, H: 20}, DefaultDefectParams, region)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if masked.Pixels != 0 {
-		t.Fatalf("pixels=%d want 0", masked.Pixels)
-	}
-	if masked.WouldDetectBright {
-		t.Fatal("masked should not detect")
-	}
-}
-
-func TestRectStrokesFillAndDetect(t *testing.T) {
+func TestRectStrokesFill(t *testing.T) {
 	golden := testCreateGray(20, 20, 100)
 	test := PaintDefects(golden, []DefectStroke{
 		{Kind: Bright, Shape: ShapeRect, X: 5, Y: 5, X2: 14, Y2: 9, Radius: 0, DeltaGv: 50, Softness: 0},
@@ -410,22 +206,59 @@ func TestRectStrokesFillAndDetect(t *testing.T) {
 	if test.Data[2*20+2] != 100 {
 		t.Fatalf("outside=%d want 100", test.Data[2*20+2])
 	}
-	report, err := DetectDefects(golden, test, DefaultDefectParams, nil)
-	if err != nil {
-		t.Fatal(err)
+	changed := 0
+	for i := range test.Data {
+		if test.Data[i] != golden.Data[i] {
+			changed++
+		}
 	}
-	var bright *DefectBlob
-	for i := range report.Blobs {
-		if report.Blobs[i].Kind == Bright {
-			bright = &report.Blobs[i]
+	if changed != 50 {
+		t.Fatalf("changed=%d want 50", changed)
+	}
+}
+
+func TestRenderGoodSample(t *testing.T) {
+	scene := testUniformScene(30, 30, 3, 100)
+	setting := testRedSetting(512, 1)
+	clean := RenderChannel(scene, &setting, ChRed)
+	good := RenderGoodSample(scene, &setting, ChRed, NoNoise)
+	if good.Width != clean.Width || good.Height != clean.Height {
+		t.Fatal("size mismatch")
+	}
+	for i := range clean.Data {
+		if good.Data[i] != clean.Data[i] {
+			t.Fatalf("mismatch at %d: %d vs %d", i, good.Data[i], clean.Data[i])
+		}
+	}
+
+	noise := SensorNoise{ReadSigma: 2, ShotGain: 0, Seed: 7}
+	first := RenderGoodSample(scene, &setting, ChRed, noise)
+	second := RenderGoodSample(scene, &setting, ChRed, noise)
+	for i := range first.Data {
+		if first.Data[i] != second.Data[i] {
+			t.Fatalf("noise not deterministic at %d", i)
+		}
+	}
+	differs := false
+	for i := range first.Data {
+		if first.Data[i] != good.Data[i] {
+			differs = true
 			break
 		}
 	}
-	if bright == nil {
-		t.Fatal("no bright blob")
+	if !differs {
+		t.Fatal("noisy image should differ from noise-free image")
 	}
-	if bright.Area != 50 {
-		t.Fatalf("area=%d want 50", bright.Area)
+	other := RenderGoodSample(scene, &setting, ChRed, SensorNoise{ReadSigma: 2, ShotGain: 0, Seed: 8})
+	same := true
+	for i := range first.Data {
+		if first.Data[i] != other.Data[i] {
+			same = false
+			break
+		}
+	}
+	if same {
+		t.Fatal("different seeds should differ")
 	}
 }
 
@@ -568,7 +401,7 @@ func TestGenerateRandomDefectsDeterministicAndConstrained(t *testing.T) {
 		t.Fatal("length mismatch")
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !reflect.DeepEqual(a[i], b[i]) {
 			t.Fatalf("stroke %d differs", i)
 		}
 	}

@@ -431,21 +431,3 @@ func MeasureGv(img *GrayImage, roi Rect) (GvStats, error) {
 	stats.SaturatedLow = saturatedLow
 	return stats, nil
 }
-
-// MaterialMask 生成材料掩码，materials 为材料索引。
-func MaterialMask(scene *LightScene, materials []uint8) []uint8 {
-	wanted := [4]bool{}
-	for _, m := range materials {
-		if m < 4 {
-			wanted[m] = true
-		}
-	}
-	n := len(scene.Material)
-	out := make([]uint8, n)
-	for i := 0; i < n; i++ {
-		if wanted[scene.Material[i]] {
-			out[i] = 1
-		}
-	}
-	return out
-}

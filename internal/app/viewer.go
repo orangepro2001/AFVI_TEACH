@@ -15,16 +15,23 @@ const (
 	PointerDown PointerKind = iota
 	PointerMove
 	PointerUp
+	// PointerRightClick is reported once on the release frame of a right click
+	// (right button pressed and released with less than 4 px of movement, no Shift).
+	PointerRightClick
 )
 
 // PointerEvent carries image coordinates (full-resolution image pixels of the shown image).
 type PointerEvent struct {
 	Kind PointerKind
 	X, Y float64
+	// Ctrl is true while the Ctrl key is held; used for add-to-selection.
+	Ctrl bool
 }
 
 // Viewer shows one RGBA texture with zoom/pan and lets the active panel draw overlays and
-// receive left-button drags. Unconsumed left drags, middle and right drags pan.
+// receive left-button drags. The wheel zooms at the cursor; Shift+left click zooms in and
+// Shift+right click zooms out (both at the cursor). Unconsumed left drags and middle/right
+// drags pan; a right click without movement is reported to the panel as PointerRightClick.
 type Viewer struct {
 	tex        *backend.Texture
 	imgW, imgH int
@@ -38,8 +45,14 @@ type Viewer struct {
 	hovered, mouseIn bool
 	toolDrag         bool
 	panDrag          bool
+	rightPressed     bool
+	rightMoved       float32
+	noDoubleClickFit bool
 	synth            *viewerInput
 }
+
+// clickZoomStep is the zoom factor applied by a Shift+left / Shift+right click.
+const clickZoomStep = 1.5
 
 // Mouse buttons in viewerInput arrays.
 const (
@@ -55,6 +68,8 @@ type viewerInput struct {
 	mouse, delta            imgui.Vec2
 	wheel                   float32
 	hovered, doubleClicked  bool
+	shift                   bool
+	ctrl                    bool
 	clicked, released, down [3]bool
 }
 
@@ -63,6 +78,8 @@ func imguiInput(hovered bool) viewerInput {
 	in := viewerInput{
 		mouse: io.MousePos(), delta: io.MouseDelta(), wheel: io.MouseWheel(), hovered: hovered,
 		doubleClicked: imgui.IsMouseDoubleClicked(imgui.MouseButtonLeft),
+		shift:         io.KeyShift(),
+		ctrl:          io.KeyCtrl(),
 	}
 	for i, b := range []imgui.MouseButton{imgui.MouseButtonLeft, imgui.MouseButtonRight, imgui.MouseButtonMiddle} {
 		in.clicked[i] = imgui.IsMouseClickedBool(b)
@@ -117,6 +134,10 @@ func (v *Viewer) HasImage() bool { return v.tex != nil }
 // Fit scales the image to the canvas on the next frame.
 func (v *Viewer) Fit() { v.needFit = true }
 
+// SetDoubleClickFit enables or disables fitting the image on a double click. Panels that
+// own left drags (frame tools, pen polygons) turn it off while a drag is in progress.
+func (v *Viewer) SetDoubleClickFit(enabled bool) { v.noDoubleClickFit = !enabled }
+
 // CenterOn scrolls so that image point (x, y) is at the canvas center on the next frame.
 func (v *Viewer) CenterOn(x, y float64) { v.centerReq = &[2]float64{x, y} }
 
@@ -138,6 +159,16 @@ func (v *Viewer) fit() {
 	v.panX = (v.size.X - float32(v.imgW)*v.zoom) / 2
 	v.panY = (v.size.Y - float32(v.imgH)*v.zoom) / 2
 	v.needFit = false
+}
+
+// zoomAt multiplies the zoom by factor, keeping the image point under mouse fixed.
+func (v *Viewer) zoomAt(mouse imgui.Vec2, factor float64) {
+	ix := (mouse.X - v.origin.X - v.panX) / v.zoom
+	iy := (mouse.Y - v.origin.Y - v.panY) / v.zoom
+	z := float64(v.zoom) * factor
+	v.zoom = float32(math.Min(64, math.Max(0.005, z)))
+	v.panX = mouse.X - v.origin.X - ix*v.zoom
+	v.panY = mouse.Y - v.origin.Y - iy*v.zoom
 }
 
 // Draw fills the remaining content region of the current window.
@@ -170,37 +201,52 @@ func (v *Viewer) Draw(overlay func(*Overlay), pointer func(PointerEvent) bool) {
 
 	m := in.mouse
 	if v.hovered && in.wheel != 0 && v.imgW > 0 {
-		ix := (m.X - origin.X - v.panX) / v.zoom
-		iy := (m.Y - origin.Y - v.panY) / v.zoom
-		z := float64(v.zoom) * math.Pow(1.2, float64(in.wheel))
-		v.zoom = float32(math.Min(64, math.Max(0.005, z)))
-		v.panX = m.X - origin.X - ix*v.zoom
-		v.panY = m.Y - origin.Y - iy*v.zoom
+		v.zoomAt(m, math.Pow(1.2, float64(in.wheel)))
 	}
 	v.mouseX = float64((m.X - origin.X - v.panX) / v.zoom)
 	v.mouseY = float64((m.Y - origin.Y - v.panY) / v.zoom)
 	v.mouseIn = v.hovered && v.mouseX >= 0 && v.mouseY >= 0 && v.mouseX < float64(v.imgW) && v.mouseY < float64(v.imgH)
 
-	if v.hovered && in.doubleClicked && !v.toolDrag {
+	if v.hovered && in.doubleClicked && !v.toolDrag && !in.shift && !v.noDoubleClickFit {
 		v.needFit = true
 	}
 	if v.hovered && in.clicked[btnLeft] {
-		if pointer != nil && v.imgW > 0 && pointer(PointerEvent{Kind: PointerDown, X: v.mouseX, Y: v.mouseY}) {
+		if in.shift {
+			// Shift+left click zooms in at the cursor and never reaches the panel.
+			if v.imgW > 0 {
+				v.zoomAt(m, clickZoomStep)
+			}
+		} else if pointer != nil && v.imgW > 0 && pointer(PointerEvent{Kind: PointerDown, X: v.mouseX, Y: v.mouseY, Ctrl: in.ctrl}) {
 			v.toolDrag = true
 		} else {
 			v.panDrag = true
 		}
 	}
-	if v.hovered && (in.clicked[btnMiddle] || in.clicked[btnRight]) {
+	if v.hovered && in.clicked[btnMiddle] {
 		v.panDrag = true
+	}
+	if v.hovered && in.clicked[btnRight] {
+		if in.shift {
+			// Shift+right click zooms out at the cursor; it is not a pan and not a right click.
+			if v.imgW > 0 {
+				v.zoomAt(m, 1/clickZoomStep)
+			}
+		} else {
+			v.panDrag = true
+			v.rightPressed = true
+			v.rightMoved = 0
+		}
+	}
+	if v.rightPressed {
+		v.rightMoved += float32(math.Abs(float64(in.delta.X))) + float32(math.Abs(float64(in.delta.Y)))
 	}
 	if v.toolDrag {
 		if (in.delta.X != 0 || in.delta.Y != 0) && pointer != nil {
-			pointer(PointerEvent{Kind: PointerMove, X: v.mouseX, Y: v.mouseY})
+			pointer(PointerEvent{Kind: PointerMove, X: v.mouseX, Y: v.mouseY, Ctrl: in.ctrl})
 		}
 		if in.released[btnLeft] {
 			if pointer != nil {
-				pointer(PointerEvent{Kind: PointerUp, X: v.mouseX, Y: v.mouseY})
+				pointer(PointerEvent{Kind: PointerUp, X: v.mouseX, Y: v.mouseY, Ctrl: in.ctrl})
 			}
 			v.toolDrag = false
 		}
@@ -210,6 +256,12 @@ func (v *Viewer) Draw(overlay func(*Overlay), pointer func(PointerEvent) bool) {
 		if !in.down[btnLeft] && !in.down[btnMiddle] && !in.down[btnRight] {
 			v.panDrag = false
 		}
+	}
+	if v.rightPressed && in.released[btnRight] {
+		if v.rightMoved < 4 && pointer != nil && v.imgW > 0 {
+			pointer(PointerEvent{Kind: PointerRightClick, X: v.mouseX, Y: v.mouseY, Ctrl: in.ctrl})
+		}
+		v.rightPressed = false
 	}
 
 	pal := CurrentPalette()

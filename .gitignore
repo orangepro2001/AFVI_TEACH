@@ -25,6 +25,7 @@ bin/
 # Self-test outputs
 selftest-out/
 selftest-output/
+snap-out/
 *-metrics.json
 *.png
 

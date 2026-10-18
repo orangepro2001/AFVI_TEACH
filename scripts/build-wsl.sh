@@ -63,10 +63,10 @@ fi
 echo "==> go vet ./..."
 go vet ./...
 
-# --- 3. config and core tests (pure Go) --------------------------------------
-echo "==> go test ./internal/config/... ./internal/core/..."
-# Run tests natively on Linux (config and core are pure Go)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/...
+# --- 3. config, core and inspect tests (pure Go) -----------------------------
+echo "==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/..."
+# Run tests natively on Linux (config, core, inspect, model, snap and camera are pure Go)
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...
 
 # --- 4. build ----------------------------------------------------------------
 echo "==> go build (cross-compile to Windows)"
@@ -79,6 +79,19 @@ if [ -f "$exe" ]; then
     echo "Built $exe ($size_mb)"
 else
     echo "ERROR: build failed, $exe not found"
+    exit 1
+fi
+
+# --- 4b. camera (pure Go, no cgo) --------------------------------------------
+echo "==> go build camera (pure Go, no cgo)"
+CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/camera.exe ./cmd/camera
+
+camera_exe="bin/camera.exe"
+if [ -f "$camera_exe" ]; then
+    size_mb=$(du -h "$camera_exe" | cut -f1)
+    echo "Built $camera_exe ($size_mb)"
+else
+    echo "ERROR: build failed, $camera_exe not found"
     exit 1
 fi
 

@@ -6,8 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/backend"
@@ -16,7 +14,7 @@ import (
 	_ "github.com/AllenDang/cimgui-go/impl/glfw"
 	_ "github.com/AllenDang/cimgui-go/impl/opengl3"
 
-	"afvi/teach-imgui/internal/config"
+	"afvi/teach-imgui/internal/model"
 )
 
 // WindowTitle is also used by the self-test to find the window for screenshots.
@@ -31,47 +29,16 @@ func Run() {
 	ref := flag.String("ref", "", "reference directory (contains FM1/FM2/BM); upserts the simulated REFERENCE machine")
 	theme := flag.String("theme", "", "ui theme: dark | light (default: config, else light)")
 	lang := flag.String("lang", "", "ui language: zh | en | ko (default: config, else zh)")
-	model := flag.String("model", "", "model id to open first, e.g. FM1/25fbo015-15")
+	modelID := flag.String("model", "", "model id to open first, e.g. FM1/25fbo015-15")
 	selftest := flag.Bool("selftest", false, "load the first model, visit every tab in both themes and three languages, save screenshots and metrics, then exit")
 	out := flag.String("out", ".", "output directory for -selftest screenshots and metrics")
 	exitAfter := flag.Duration("exitafter", 0, "close the window after this duration")
 	flag.Parse()
 
-	cfgPath, found := config.Resolve(*cfgFlag)
-	var cfg *config.Config
-	if found {
-		loaded, err := config.Load(cfgPath)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cfg = loaded
-	} else {
-		refRoot, err := FindReferenceRoot("")
-		if err != nil {
-			exe, exeErr := os.Executable()
-			if exeErr != nil {
-				exe = "."
-			}
-			refRoot = filepath.Join(filepath.Dir(exe), "reference")
-		}
-		cfg = config.Default(refRoot)
-		cfg.BaseDir = filepath.Dir(cfgPath)
-	}
-	if *ref != "" {
-		abs, err := filepath.Abs(*ref)
-		if err != nil {
-			abs = *ref
-		}
-		cfg.UpsertReference(abs)
-	}
-	if *machine != "" {
-		for _, m := range cfg.Machines {
-			if strings.EqualFold(m.Name, *machine) {
-				cfg.Active = m.Name
-				break
-			}
-		}
+	cfg, cfgPath, err := model.ResolveConfig(*cfgFlag, *ref, *machine)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	themeName := *theme
 	if themeName == "" {
@@ -120,12 +87,22 @@ func Run() {
 
 	first := 0
 	for i, m := range a.Models {
-		if m.ID == *model {
+		if m.ID == *modelID {
 			first = i
 		}
 	}
 	a.LoadModel(first)
 	be.Run(func() { loop(a) })
+	a.closePanels()
+}
+
+// closePanels lets panels release resources (temporary files) when the window has closed.
+func (a *App) closePanels() {
+	for _, p := range a.panels {
+		if c, ok := p.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
 }
 
 func loop(a *App) {

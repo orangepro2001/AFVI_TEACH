@@ -40,7 +40,7 @@
 ./scripts/build-wsl.sh --offline          # 离线构建（需要模块缓存）
 ```
 
-输出：`bin/teach-imgui.exe` (~7 MB)
+输出：`bin/teach-imgui.exe` (~7 MB) 与 `bin/camera.exe`（纯 Go，无 cgo）
 
 Windows 原生构建：
 
@@ -50,7 +50,14 @@ Windows 原生构建：
 
 可选：运行配置包与核心算法测试（纯 Go，无需交叉编译）
 ```bash
-go test ./internal/config/... ./internal/core/...
+go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...
+```
+
+相机模拟程序是纯 Go，可直接在 Linux 上原生构建与运行：
+
+```bash
+CGO_ENABLED=0 go build -o bin/camera ./cmd/camera
+bin/camera -ref reference -list
 ```
 
 ## 运行（在 Windows 环境中）
@@ -79,8 +86,9 @@ go test ./internal/config/... ./internal/core/...
 
 ### 通用操作
 - **滚轮**：以光标为中心缩放
+- **Shift + 鼠标左键点击**：放大（×1.5，以光标为中心）；**Shift + 鼠标右键点击**：缩小（÷1.5，以光标为中心）
 - **中键/右键拖动**：平移画布
-- **双击**：适应窗口
+- **双击**：适应窗口（画框工具绘制过程中不会触发）
 - **菜单栏**：文件（机台配置…、重新扫描型号、退出）、视图（主题、语言、适应窗口）、帮助（关于…）
 - **工具栏**：机台下拉框 + `…` 按钮、型号下拉框、加载状态
 - **页签**：切换光照 / 对齐 / 缺陷页
@@ -88,7 +96,7 @@ go test ./internal/config/... ./internal/core/...
 ### 页面功能
 - **光照页**：左侧滑块调节亮度，左键拖框测量 GV
 - **对齐页**：左键新建 ROI/遮挡，选择移动，Delete 删除
-- **缺陷页**：画点/线/块/异物/污染，探查缺陷
+- **缺陷页**：画点/线/块/异物/污染，探查缺陷；画框工具（矩形 / 椭圆 / 钢笔，右键闭合多边形，Esc 取消，Backspace 撤销顶点）；不良颜色（按颜色模拟，R/G/B 滑块与七个预设）；虚拟良品（纹理强度 / 种子 / 相关长度倍率，换一块板、恢复默认）与默认不良（约 10 个 SR 内的小亮点，可重新生成 / 移除 / 隐藏轮廓）；选择工具（悬浮面板的点选 / 矩形框 / 椭圆框 / 多边形框）与浮动"选中的不良"窗口批量调参；检出参数按 F1 唤出/关闭浮动窗口，窗口内按相机通道各有一套参数，逐材质（metal / sr / open / base）设置可接受亮度区间 [Low, High]、分组尺寸 Size 与最小面积 MinArea，区间由良品样本学习得到，并有全局的边缘忽略（0–64 像素，默认 6）
 
 ## 技术特性
 
@@ -97,8 +105,11 @@ go test ./internal/config/... ./internal/core/...
 - 经典浅灰 / 深色主题运行时切换（视图菜单）
 - 经典 Win32 外观：3D 立体边框、菜单栏、工具栏、多窗格状态栏
 - 机台配置（`afvi.toml`）与机台配置对话框
-- 完整的 teach-core 算法移植（gray、rng、light、warp、align、defect）
-- 配置包测试 + 58 个单元测试，与 TypeScript 版本跨语言验证一致
+- 完整的 teach-core 仿真移植（gray、rng、light、warp、align、defect 涂抹与渲染）
+- 虚拟良品：加载型号时把确定性的表面不均匀烘焙进光照场景，所有页面都渲染"真实"良品；缺陷页自动加入约 10 个肉眼几乎不可见的默认亮点
+- 悬浮工具面板（点选 / 矩形框 / 椭圆框 / 多边形框 / 专注）与专注模式（F11 隐藏两侧面板），缺陷页可用它选择并批量调整已画的不良
+- 独立的检出算法包 `internal/inspect`（只看测试图与设计材质图，含全局边缘忽略）
+- 配置包 16 个测试 + 核心 73 个测试 + 检出 31 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试；渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致，检出不再与 TS 版本对照
 
 ## 目录结构
 
@@ -108,11 +119,16 @@ AFVI_TEACH/
 ├── cmd/teach-imgui/  # 程序入口（main.go）
 ├── internal/
 │   ├── app/          # UI 应用（run.go、app.go、win32.go、dlg_config.go、jobs.go、
-│   │                 # viewer.go、models.go、pack.go、widgets.go、theme.go、i18n.go、
-│   │                 # panel_light.go、panel_align.go、panel_defect.go、
+│   │                 # viewer.go、shapetool.go、models.go、pack.go、widgets.go、theme.go、i18n.go、
+│   │                 # panel_light.go、panel_align.go、panel_defect.go、toolpalette.go、
+│   │                 # defect_select.go、defect_product.go、inspect_bridge.go、
 │   │                 # selftest.go、capture_windows.go）
-│   ├── core/         # teach-core 的 Go 移植与测试
-│   └── config/       # 机台配置包（afvi.toml，纯 Go）与测试
+│   ├── core/         # 仿真（teach-core 的 Go 移植，含虚拟良品与笔画几何）与测试
+│   ├── inspect/      # 检出算法：只看测试图与设计材质图，含单元测试与隔离测试
+│   ├── config/       # 机台配置包（afvi.toml，纯 Go）与测试
+│   ├── model/        # 模型扫描与加载（纯 Go，含 modeltest 合成参考树）
+│   ├── snap/         # 抓拍文件格式（snap.json + 灰度 PNG，仅标准库与 core）
+│   └── camera/       # 相机渲染与命令行（纯 Go，无 cgo）
 ├── configs/          # 机台配置示例（afvi.example.toml）
 ├── scripts/          # build-wsl.sh（WSL2）、build.ps1（Windows）
 ├── docs/             # BUILD.md、USAGE.md、REFERENCE_SETUP.md
@@ -150,13 +166,14 @@ export GOPROXY=https://goproxy.cn,direct
 - 60 fps 持续重绘（空闲约占单核 3.4% CPU）
 - 字体取自 `C:\Windows\Fonts`，仅支持 Windows
 - 未适配高 DPI 缩放
-- 教学近似的阈值模型，部分机台参数未模拟
+- 检出是教学用的简化亮度区间算法（Metal / SR 各一个区间；真实产品的 Space、Open 等分层与 Margine、Offset 等机台参数未模拟），成像噪声也是近似
+- 检出的边缘忽略（Margine）是单一全局像素数；虚拟良品是统计意义上的非均匀（多尺度噪声 + 颗粒），不模拟真实的划痕、氧化、批次差异；默认不良只放在 SR 内部亮点；选择工具只选 GV 笔画（异物/污染笔画不可选）
 
 ## 开发建议
 
 如果要修改代码：
 
-1. **纯算法修改**：修改 `internal/core/`，运行 `go test ./internal/config/... ./internal/core/...`
+1. **纯算法修改**：仿真改 `internal/core/`（含虚拟良品 `product.go` 与笔画几何 `strokegeom.go`），检出改 `internal/inspect/`（检出算法只依赖标准库，只看测试图与设计材质图），相机改 `internal/camera/` 与 `internal/snap/`，运行 `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...`（配置包 16 个测试 + 核心 73 个测试 + 检出 30 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试）
 2. **UI 修改**：修改对应的 `internal/app/panel_*.go` 或 `internal/app/viewer.go`
 3. **构建验证**：`./scripts/build-wsl.sh`，传输到 Windows 运行
 4. **自测验证**：在 Windows 运行 `.\bin\teach-imgui.exe -selftest -out <dir>`
