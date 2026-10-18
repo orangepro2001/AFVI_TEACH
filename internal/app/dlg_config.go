@@ -138,7 +138,7 @@ func (a *App) drawConfigDialog() {
 	vp := imgui.MainViewport()
 	center := imgui.NewVec2(vp.Pos().X+vp.Size().X/2, vp.Pos().Y+vp.Size().Y/2)
 	imgui.SetNextWindowPosV(center, imgui.CondAlways, imgui.NewVec2(0.5, 0.5))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(640, 430), imgui.CondAlways)
+	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(640), sc(430)), imgui.CondAlways)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
 		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
 	// 10 px right padding keeps the group boxes (full available width) off the window frame.
@@ -161,12 +161,12 @@ func (a *App) drawConfigDialog() {
 	dl := imgui.WindowDrawList()
 	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
 	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+23)
+	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
 	Caption(dl, capMin, capMax, T("cfg.title"), true)
 
 	cancel := false
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-18, capMin.Y+3))
-	if ButtonSized("x", "cfg-close", imgui.NewVec2(16, 14), true) {
+	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
+	if ButtonSized("x", "cfg-close", imgui.NewVec2(sc(16), sc(14)), true) {
 		cancel = true
 	}
 	if imgui.IsKeyPressedBool(imgui.KeyEscape) {
@@ -174,23 +174,19 @@ func (a *App) drawConfigDialog() {
 	}
 
 	// Body.
-	const bodyY = 32
-	const leftX = 10
-	const leftW = 176
-	const rightX = 196
-	const rightW = 434
+	bodyY, leftX, leftW, rightX, rightW := sc(32), sc(10), sc(176), sc(196), sc(434)
 
 	// Left column: machine list.
 	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, wp.Y+bodyY))
 	imgui.TextUnformatted(T("cfg.machines"))
 	listTop := imgui.CursorScreenPos().Y + imgui.TextLineHeight() + 4
 	listMin := imgui.NewVec2(wp.X+leftX, listTop)
-	listMax := imgui.NewVec2(wp.X+leftX+leftW, listTop+230)
+	listMax := imgui.NewVec2(wp.X+leftX+leftW, listTop+sc(230))
 	FillRect(dl, listMin, listMax, CurrentPalette().Field)
 	DrawEdge(dl, listMin, listMax, EdgeSunken)
 	imgui.SetCursorScreenPos(imgui.NewVec2(listMin.X+2, listMin.Y+2))
 	imgui.PushStyleColorVec4(imgui.ColChildBg, PaletteVec4(CurrentPalette().Field))
-	imgui.BeginChildStrV("##cfg-list", imgui.NewVec2(leftW-4, 226), 0, 0)
+	imgui.BeginChildStrV("##cfg-list", imgui.NewVec2(leftW-4, sc(226)), 0, 0)
 	for i := range d.draft.Machines {
 		name := d.draft.Machines[i].Name
 		if imgui.SelectableBoolV(name+"##m"+strconv.Itoa(i), i == d.sel, 0, imgui.NewVec2(0, 0)) && i != d.sel {
@@ -211,35 +207,35 @@ func (a *App) drawConfigDialog() {
 	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
 	addLabel, remLabel, dupLabel := T("cfg.add"), T("cfg.remove"), T("cfg.duplicate")
 	addW, remW, dupW := ButtonWidth(addLabel), ButtonWidth(remLabel), ButtonWidth(dupLabel)
-	if addW < 52 {
-		addW = 52
+	if addW < sc(52) {
+		addW = sc(52)
 	}
-	if remW < 52 {
-		remW = 52
+	if remW < sc(52) {
+		remW = sc(52)
 	}
-	if dupW < 52 {
-		dupW = 52
+	if dupW < sc(52) {
+		dupW = sc(52)
 	}
 	spacing := imgui.CurrentStyle().ItemSpacing().X
 	rowW := addW + remW + dupW + 2*spacing
 	// Two rows when the three buttons do not fit in the column.
 	if rowW > leftW {
 		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
-		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, 23), true) {
+		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, imgui.FrameHeight()+2), true) {
 			d.draft.Machines = append(d.draft.Machines, config.Machine{Name: uniqueName(d.draft)})
 			d.sel = len(d.draft.Machines) - 1
 			d.recheck(a)
 		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY+27))
-		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, 23), len(d.draft.Machines) > 1) {
+		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY+imgui.FrameHeight()+6))
+		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, imgui.FrameHeight()+2), len(d.draft.Machines) > 1) {
 			d.draft.Machines = append(d.draft.Machines[:d.sel], d.draft.Machines[d.sel+1:]...)
 			if d.sel >= len(d.draft.Machines) {
 				d.sel = len(d.draft.Machines) - 1
 			}
 			d.recheck(a)
 		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+remW+spacing, btnY+27))
-		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, 23), true) {
+		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+remW+spacing, btnY+imgui.FrameHeight()+6))
+		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, imgui.FrameHeight()+2), true) {
 			cp := d.draft.Machines[d.sel]
 			cp.Name = uniqueCopyName(d.draft, cp.Name)
 			d.draft.Machines = append(d.draft.Machines, cp)
@@ -248,13 +244,13 @@ func (a *App) drawConfigDialog() {
 		}
 	} else {
 		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
-		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, 23), true) {
+		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, imgui.FrameHeight()+2), true) {
 			d.draft.Machines = append(d.draft.Machines, config.Machine{Name: uniqueName(d.draft)})
 			d.sel = len(d.draft.Machines) - 1
 			d.recheck(a)
 		}
 		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+addW+spacing, btnY))
-		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, 23), len(d.draft.Machines) > 1) {
+		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, imgui.FrameHeight()+2), len(d.draft.Machines) > 1) {
 			d.draft.Machines = append(d.draft.Machines[:d.sel], d.draft.Machines[d.sel+1:]...)
 			if d.sel >= len(d.draft.Machines) {
 				d.sel = len(d.draft.Machines) - 1
@@ -262,7 +258,7 @@ func (a *App) drawConfigDialog() {
 			d.recheck(a)
 		}
 		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+addW+remW+2*spacing, btnY))
-		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, 23), true) {
+		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, imgui.FrameHeight()+2), true) {
 			cp := d.draft.Machines[d.sel]
 			cp.Name = uniqueCopyName(d.draft, cp.Name)
 			d.draft.Machines = append(d.draft.Machines, cp)
@@ -284,7 +280,7 @@ func (a *App) drawConfigDialog() {
 			if InputText(label, id, buf, T("cfg.hintPath")) {
 				d.stat[idx].checked = false
 			}
-			imgui.SetCursorPosX(imgui.CursorPosX() + labelWidth)
+			imgui.SetCursorPosX(imgui.CursorPosX() + labelWidth())
 			txt, col := statusText(d.stat[idx])
 			imgui.TextColored(col, txt)
 		}
@@ -298,14 +294,14 @@ func (a *App) drawConfigDialog() {
 		if avail > cw {
 			imgui.SetCursorPosX(imgui.CursorPosX() + avail - cw)
 		}
-		if ButtonSized(checkLabel, "cfg-check", imgui.NewVec2(cw, 23), true) {
+		if ButtonSized(checkLabel, "cfg-check", imgui.NewVec2(cw, imgui.FrameHeight()+2), true) {
 			d.recheck(a)
 		}
 	})
 	imgui.PopItemWidth()
 
 	// Bottom area.
-	const bottomY = 430 - 62
+	bottomY := sc(430) - sc(62)
 	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, wp.Y+bottomY))
 	Note(T("cfg.file") + a.CfgPath)
 	verr := d.draft.Validate()
@@ -317,21 +313,21 @@ func (a *App) drawConfigDialog() {
 
 	okLabel, cancelLabel, applyLabel := T("cfg.ok"), T("cfg.cancel"), T("cfg.apply")
 	okW, cancelW, applyW := ButtonWidth(okLabel), ButtonWidth(cancelLabel), ButtonWidth(applyLabel)
-	if okW < 75 {
-		okW = 75
+	if okW < sc(75) {
+		okW = sc(75)
 	}
-	if cancelW < 75 {
-		cancelW = 75
+	if cancelW < sc(75) {
+		cancelW = sc(75)
 	}
-	if applyW < 75 {
-		applyW = 75
+	if applyW < sc(75) {
+		applyW = sc(75)
 	}
 	btnRowW := okW + cancelW + applyW + 2*spacing
-	btnX := wp.X + ws.X - 10 - btnRowW
-	btnY2 := wp.Y + 430 - 30
+	btnX := wp.X + ws.X - sc(10) - btnRowW
+	btnY2 := wp.Y + sc(430) - sc(30)
 	imgui.SetCursorScreenPos(imgui.NewVec2(btnX, btnY2))
 	enabled := verr == nil
-	if ButtonSized(okLabel, "cfg-ok", imgui.NewVec2(okW, 23), enabled) {
+	if ButtonSized(okLabel, "cfg-ok", imgui.NewVec2(okW, imgui.FrameHeight()+2), enabled) {
 		d.draft.Active = d.draft.Machines[d.sel].Name
 		d.draft.Theme = a.theme
 		d.draft.Lang = string(CurrentLang())
@@ -343,11 +339,11 @@ func (a *App) drawConfigDialog() {
 		}
 	}
 	imgui.SetCursorScreenPos(imgui.NewVec2(btnX+okW+spacing, btnY2))
-	if ButtonSized(cancelLabel, "cfg-cancel", imgui.NewVec2(cancelW, 23), true) {
+	if ButtonSized(cancelLabel, "cfg-cancel", imgui.NewVec2(cancelW, imgui.FrameHeight()+2), true) {
 		cancel = true
 	}
 	imgui.SetCursorScreenPos(imgui.NewVec2(btnX+okW+cancelW+2*spacing, btnY2))
-	if ButtonSized(applyLabel, "cfg-apply", imgui.NewVec2(applyW, 23), enabled) {
+	if ButtonSized(applyLabel, "cfg-apply", imgui.NewVec2(applyW, imgui.FrameHeight()+2), enabled) {
 		d.draft.Active = d.draft.Machines[d.sel].Name
 		d.draft.Theme = a.theme
 		d.draft.Lang = string(CurrentLang())

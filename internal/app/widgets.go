@@ -12,7 +12,8 @@ import (
 // Compact label-left controls for dense industrial panels. Every control takes a stable
 // id separate from its (translated) label so switching language keeps widget state.
 
-const labelWidth = 112
+// labelWidth is the label column width, scaled from the 13 px design font.
+func labelWidth() float32 { return sc(112) }
 
 // groupInset is the extra right inset applied to label-left controls while they are
 // drawn inside a GroupBox, so fields do not touch the etched frame.
@@ -29,7 +30,7 @@ func F(v float64, digits int) string {
 func labelColumn(label string) {
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(label)
-	imgui.SameLineV(labelWidth, -1)
+	imgui.SameLineV(labelWidth(), -1)
 	imgui.SetNextItemWidth(-1 - groupInset)
 }
 
@@ -142,9 +143,9 @@ func WrapSameLine(nextLabel string) {
 
 // ButtonWidth is the shared push-button width: text plus padding, at least 75 px.
 func ButtonWidth(label string) float32 {
-	w := imgui.CalcTextSize(label).X + 24
-	if w < 75 {
-		w = 75
+	w := imgui.CalcTextSize(label).X + sc(24)
+	if w < sc(75) {
+		w = sc(75)
 	}
 	return w
 }
@@ -262,7 +263,7 @@ func TabStrip(id string, labels []string, active int) int {
 	p := CurrentPalette()
 	x := start.X
 	for i, label := range labels {
-		w := imgui.CalcTextSize(label).X + 24
+		w := imgui.CalcTextSize(label).X + sc(24)
 		imgui.SetCursorScreenPos(imgui.NewVec2(x, start.Y))
 		if imgui.InvisibleButton("##"+id+strconv.Itoa(i), imgui.NewVec2(w, h)) {
 			clicked = i
@@ -327,6 +328,14 @@ func KVTable(id string, rows [][2]string) {
 	if !imgui.BeginTableV("##kv-"+id, 2, imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
 		return
 	}
+	maxLabel := float32(0)
+	for _, r := range rows {
+		if w := imgui.CalcTextSize(r[0]).X; w > maxLabel {
+			maxLabel = w
+		}
+	}
+	imgui.TableSetupColumnV("", imgui.TableColumnFlagsWidthFixed, maxLabel+sc(12), 0)
+	imgui.TableSetupColumnV("", imgui.TableColumnFlagsWidthStretch, 1, 0)
 	dim := CurrentPalette().TextDim
 	for _, r := range rows {
 		imgui.TableNextRow()

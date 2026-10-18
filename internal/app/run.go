@@ -17,13 +17,18 @@ import (
 	"afvi/teach-imgui/internal/model"
 )
 
-// WindowTitle is also used by the self-test to find the window for screenshots.
-const WindowTitle = "Color AFVI Master Teach"
-
-// Run parses the command line, loads the machine configuration and runs the UI main loop.
+// Run runs the teaching program (align + defect detection); cmd/teach-imgui calls it.
 // It must be called from the main goroutine on a locked OS thread (GLFW and OpenGL
-// require every call to come from the main OS thread); cmd/teach-imgui does that.
-func Run() {
+// require every call to come from the main OS thread).
+func Run() { runProfile(ProfileTeach) }
+
+// RunStudio runs the camera studio (light + defect synthesis); cmd/camera-gui calls it
+// from a locked OS thread.
+func RunStudio() { runProfile(ProfileStudio) }
+
+// runProfile parses the command line, loads the machine configuration and runs the UI
+// main loop for the given profile.
+func runProfile(profile Profile) {
 	cfgFlag := flag.String("config", "", "machine configuration file (afvi.toml); default: AFVI_CONFIG, next to the exe, or the working directory")
 	machine := flag.String("machine", "", "machine name to activate (case-insensitive)")
 	ref := flag.String("ref", "", "reference directory (contains FM1/FM2/BM); upserts the simulated REFERENCE machine")
@@ -33,7 +38,10 @@ func Run() {
 	selftest := flag.Bool("selftest", false, "load the first model, visit every tab in both themes and three languages, save screenshots and metrics, then exit")
 	out := flag.String("out", ".", "output directory for -selftest screenshots and metrics")
 	exitAfter := flag.Duration("exitafter", 0, "close the window after this duration")
+	fontsize := flag.Float64("fontsize", defaultFontPx, "UI font size in pixels (10-28)")
+	linkAddr := flag.String("link", "", "live link address: the studio listens on it, the teach program dials it (default 127.0.0.1:47631, or AFVI_LINK); off disables the link")
 	flag.Parse()
+	SetFontPx(float32(*fontsize))
 
 	cfg, cfgPath, err := model.ResolveConfig(*cfgFlag, *ref, *machine)
 	if err != nil {
@@ -59,8 +67,21 @@ func Run() {
 	}
 	SetLang(ParseLang(langName))
 
-	a := NewApp(cfg, cfgPath, themeName)
+	a := NewApp(cfg, cfgPath, themeName, profile)
 	a.exitAfter = *exitAfter
+	// The self-test walks the programs alone: it only opens the link when -link is given.
+	linkGiven := false
+	flag.Visit(func(f *flag.Flag) { linkGiven = linkGiven || f.Name == "link" })
+	if !*selftest || linkGiven {
+		addr, on, err := resolveLinkAddr(*linkAddr, profile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		if on {
+			a.StartLive(addr)
+		}
+	}
 	if *selftest {
 		a.selftest = NewSelftest(a, *out)
 	}
@@ -78,7 +99,7 @@ func Run() {
 		}
 	})
 	be.SetBgColor(imgui.NewVec4(0.17, 0.17, 0.17, 1))
-	be.CreateWindow(WindowTitle, 1600, 1000)
+	be.CreateWindow(profile.WindowTitle(), 1600, 1000)
 	if a.selftest != nil {
 		be.SetTargetFPS(1000)
 	} else {
@@ -93,6 +114,7 @@ func Run() {
 	}
 	a.LoadModel(first)
 	be.Run(func() { loop(a) })
+	a.closeLive()
 	a.closePanels()
 }
 
@@ -137,7 +159,7 @@ func setupFonts() {
 		if !base {
 			cfg.SetMergeMode(true)
 		}
-		atlas.AddFontFromFileTTFV(path, 13, cfg, nil)
+		atlas.AddFontFromFileTTFV(path, fontPx, cfg, nil)
 		base = false
 	}
 }

@@ -51,11 +51,30 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- 3. config, core and inspect tests (pure Go, CGO_ENABLED has no effect) --
-Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...'
-& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...
+Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/...'
+& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/...
 if ($LASTEXITCODE -ne 0) {
-    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... failed.'
+    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... failed.'
     exit 1
+}
+
+# --- 3b. application icons (Windows resources) -------------------------------
+# windres comes with the scoop mingw package; without it the executables get the default icon.
+$windres = Join-Path $mingwBin 'windres.exe'
+if (Test-Path -LiteralPath $windres) {
+    Write-Host '==> windres (application icons)'
+    & $windres -O coff -o cmd\teach-imgui\rsrc_windows_amd64.syso cmd\teach-imgui\teach.rc
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'windres failed for teach-imgui.'
+        exit 1
+    }
+    & $windres -O coff -o cmd\camera-gui\rsrc_windows_amd64.syso cmd\camera-gui\studio.rc
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'windres failed for camera-gui.'
+        exit 1
+    }
+} else {
+    Write-Host 'WARNING: windres.exe not found, the executables get no icon'
 }
 
 # --- 4. build ----------------------------------------------------------------
@@ -74,7 +93,18 @@ $exe = Join-Path $Root 'bin\teach-imgui.exe'
 $sizeMB = [math]::Round((Get-Item -LiteralPath $exe).Length / 1MB, 2)
 Write-Host ("Built {0} ({1} MB)" -f $exe, $sizeMB)
 
-# --- 4b. camera (pure Go, no cgo) --------------------------------------------
+# --- 4b. camera-gui (studio, cgo like the teach program) ---------------------
+Write-Host '==> go build camera-gui'
+& go build -ldflags "-s -w -extldflags=-static" -o bin\camera-gui.exe ./cmd/camera-gui
+if ($LASTEXITCODE -ne 0) {
+    Write-Error 'go build camera-gui failed.'
+    exit 1
+}
+$studioExe = Join-Path $Root 'bin\camera-gui.exe'
+$studioSizeMB = [math]::Round((Get-Item -LiteralPath $studioExe).Length / 1MB, 2)
+Write-Host ("Built {0} ({1} MB)" -f $studioExe, $studioSizeMB)
+
+# --- 4c. camera (pure Go, no cgo) --------------------------------------------
 Write-Host '==> go build camera (pure Go, no cgo)'
 $env:CGO_ENABLED = '0'
 & go build -ldflags "-s -w" -o bin\camera.exe ./cmd/camera

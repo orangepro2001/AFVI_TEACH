@@ -1,0 +1,6 @@
+// Application icon of teach-imgui.exe. scripts/build-wsl.sh and scripts/build.ps1 compile this
+// file from the repository root with windres into cmd/teach-imgui/rsrc_windows_amd64.syso.
+// GLFW_ICON is the window and taskbar icon (GLFW looks it up by this name); group 1 is what
+// Explorer shows for the file.
+GLFW_ICON ICON "assets/icons/teach.ico"
+1 ICON "assets/icons/teach.ico"

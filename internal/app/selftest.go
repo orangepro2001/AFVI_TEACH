@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -103,6 +105,7 @@ func NewSelftest(a *App, out string) *Selftest {
 	s.steps = []selftestStep{
 		{name: "load"},
 		{name: "light-dark-zh", enter: func(a *App) { a.theme = ThemeDark; SetLang(LangZh); tab("light")(a) }, shot: "native-light-dark-zh.png"},
+		{name: "teach-start", enter: func(a *App) { a.theme = ThemeDark; SetLang(LangZh); tab("align")(a) }},
 		{name: "interact-viewer", input: func(s *Selftest) []viewerInput {
 			v := s.a.Viewer
 			zoom0 = v.zoom
@@ -218,7 +221,7 @@ func NewSelftest(a *App, out string) *Selftest {
 			if st == nil || st.Shape != core.ShapeRect || dp.renderRev != dp.renderedRev {
 				return nil, fmt.Errorf("rect stroke not rendered")
 			}
-			return map[string]any{"rect": fmt.Sprintf("%.0f,%.0f→%.0f,%.0f", st.X, st.Y, st.X2, st.Y2), "defects": len(dp.lastReport.Defects)}, nil
+			return map[string]any{"rect": fmt.Sprintf("%.0f,%.0f→%.0f,%.0f", st.X, st.Y, st.X2, st.Y2)}, nil
 		}},
 		{name: "interact-defect-ellipse", enter: func(a *App) {
 			dp := s.panel("defect").(*DefectPanel)
@@ -626,18 +629,36 @@ func NewSelftest(a *App, out string) *Selftest {
 	var widthBefore, widthFocus float64
 	s.steps = append(s.steps,
 		selftestStep{
-			name: "palette-caps", enter: tab("light"), shot: "native-palette-light.png",
+			name: "palette-caps", enter: func(a *App) {
+				if a.profile == ProfileStudio {
+					tab("light")(a)
+				} else {
+					tab("align")(a)
+				}
+			}, shot: "native-palette-caps.png",
 			check: func(s *Selftest) (map[string]any, error) {
-				lp, ok := s.panel("light").(PaletteHost)
-				if !ok {
-					return nil, fmt.Errorf("palette-caps: light panel does not implement PaletteHost")
-				}
-				if !lp.PaletteSupports(PaletteRect) || lp.PaletteSupports(PalettePick) ||
-					lp.PaletteSupports(PaletteEllipse) || lp.PaletteSupports(PalettePolygon) {
-					return nil, fmt.Errorf("palette-caps: light panel supports the wrong tools")
-				}
-				if lp.PaletteTool() != PaletteRect {
-					return nil, fmt.Errorf("palette-caps: light panel active tool %v, want rect", lp.PaletteTool())
+				if s.a.profile == ProfileStudio {
+					lp, ok := s.panel("light").(PaletteHost)
+					if !ok {
+						return nil, fmt.Errorf("palette-caps: light panel does not implement PaletteHost")
+					}
+					if !lp.PaletteSupports(PaletteRect) || lp.PaletteSupports(PalettePick) ||
+						lp.PaletteSupports(PaletteEllipse) || lp.PaletteSupports(PalettePolygon) {
+						return nil, fmt.Errorf("palette-caps: light panel supports the wrong tools")
+					}
+					if lp.PaletteTool() != PaletteRect {
+						return nil, fmt.Errorf("palette-caps: light panel active tool %v, want rect", lp.PaletteTool())
+					}
+					dp, ok := s.panel("defect").(PaletteHost)
+					if !ok {
+						return nil, fmt.Errorf("palette-caps: defect panel does not implement PaletteHost")
+					}
+					for _, t := range []PaletteTool{PalettePick, PaletteRect, PaletteEllipse, PalettePolygon} {
+						if !dp.PaletteSupports(t) {
+							return nil, fmt.Errorf("palette-caps: defect panel does not support tool %v", t)
+						}
+					}
+					return map[string]any{"profile": string(s.a.profile), "light": "rect", "defect": "pick,rect,ellipse,polygon"}, nil
 				}
 				ap, ok := s.panel("align").(PaletteHost)
 				if !ok {
@@ -659,10 +680,16 @@ func NewSelftest(a *App, out string) *Selftest {
 				if ap.(*AlignPanel).tool != "none" {
 					return nil, fmt.Errorf("palette-caps: none set tool %q, want none", ap.(*AlignPanel).tool)
 				}
-				if s.panel("defect") == nil {
-					return nil, fmt.Errorf("palette-caps: defect panel missing")
+				dp, ok := s.panel("defect").(PaletteHost)
+				if !ok {
+					return nil, fmt.Errorf("palette-caps: defect panel does not implement PaletteHost")
 				}
-				return map[string]any{"light": "rect", "align": "pick,rect"}, nil
+				for _, t := range []PaletteTool{PalettePick, PaletteRect, PaletteEllipse, PalettePolygon} {
+					if dp.PaletteSupports(t) {
+						return nil, fmt.Errorf("palette-caps: defect panel supports tool %v in detect mode", t)
+					}
+				}
+				return map[string]any{"profile": string(s.a.profile), "align": "pick,rect"}, nil
 			},
 		},
 		selftestStep{
@@ -756,8 +783,8 @@ func NewSelftest(a *App, out string) *Selftest {
 				if !dp.PaletteSupports(PaletteEllipse) {
 					return nil, fmt.Errorf("select-setup: ellipse not supported")
 				}
-				if dp.lastReport == nil {
-					return nil, fmt.Errorf("select-setup: no report")
+				if dp.test == nil {
+					return nil, fmt.Errorf("select-setup: no test image")
 				}
 				return map[string]any{"strokes": len(dp.strokes)}, nil
 			},
@@ -813,12 +840,7 @@ func NewSelftest(a *App, out string) *Selftest {
 		selftestStep{
 			name: "select-edit", enter: func(a *App) {
 				dp := s.panel("defect").(*DefectPanel)
-				selBefore = 0
-				for _, st := range dp.selectedStrokes() {
-					if dp.strokeDetected(st) {
-						selBefore++
-					}
-				}
+				selBefore = len(dp.selectedStrokes())
 				dp.applyToSelection(func(st *core.DefectStroke) {
 					st.DeltaGv = 4
 					st.Radius = 1
@@ -827,24 +849,24 @@ func NewSelftest(a *App, out string) *Selftest {
 			check: func(s *Selftest) (map[string]any, error) {
 				dp := s.panel("defect").(*DefectPanel)
 				if selBefore != 1 {
-					return nil, fmt.Errorf("select-edit: detected before %d, want 1", selBefore)
+					return nil, fmt.Errorf("select-edit: selected before %d, want 1", selBefore)
 				}
 				selAfter = 0
 				for _, st := range dp.selectedStrokes() {
-					if dp.strokeDetected(st) {
+					if st.DeltaGv == 4 && st.Radius == 1 {
 						selAfter++
 					}
 				}
-				if selAfter != 0 {
-					return nil, fmt.Errorf("select-edit: detected after %d, want 0", selAfter)
+				if selAfter != 1 {
+					return nil, fmt.Errorf("select-edit: edited %d selected strokes, want 1", selAfter)
 				}
-				if !dp.strokeDetected(dp.strokes[1].gv) {
-					return nil, fmt.Errorf("select-edit: stroke B no longer detected")
+				if b := dp.strokes[1].gv; b.DeltaGv != 80 || b.Radius != 3 {
+					return nil, fmt.Errorf("select-edit: stroke B changed (dGV %.0f, radius %.0f)", b.DeltaGv, b.Radius)
 				}
 				if len(dp.sel.set) != 1 || !dp.sel.set[dp.strokes[0].gv] {
 					return nil, fmt.Errorf("select-edit: selection changed")
 				}
-				return map[string]any{"detectedBefore": selBefore, "detectedAfter": selAfter}, nil
+				return map[string]any{"selectedBefore": selBefore, "editedAfter": selAfter}, nil
 			},
 		},
 		selftestStep{
@@ -1200,7 +1222,7 @@ func NewSelftest(a *App, out string) *Selftest {
 				dp := s.panel("defect").(*DefectPanel)
 				dp.channel = core.ChRed
 				dp.strokes = nil
-				dp.snapSrc.path = snapDir
+				dp.snapSrc.path, dp.snapSrc.pathAuto = snapDir, false
 				dp.requestSnapLoad(snapDir)
 			},
 			check: func(s *Selftest) (map[string]any, error) {
@@ -1417,8 +1439,290 @@ func NewSelftest(a *App, out string) *Selftest {
 				}, nil
 			},
 		},
+		selftestStep{
+			name: "studio-save", enter: func(a *App) {
+				tab("defect")(a)
+				dp := s.panel("defect").(*DefectPanel)
+				dp.studio.chInit = true
+				dp.studio.channels = [3]bool{true, false, false}
+				dp.studio.good = true
+				dp.studio.recipe = false
+				dp.studio.dir = filepath.Join(s.out, "studio-capture")
+				dp.requestSaveCapture()
+			}, shot: "native-studio-save.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.studio.last == nil || dp.studio.msgErr {
+					return nil, fmt.Errorf("studio-save: %s %s", dp.studio.msgKey, dp.studio.msgText)
+				}
+				meta, dir, err := snapfmt.ReadMeta(dp.studio.dir)
+				if err != nil {
+					return nil, fmt.Errorf("studio-save: %v", err)
+				}
+				if !strings.HasPrefix(meta.Producer, "afvi-camera") {
+					return nil, fmt.Errorf("studio-save: producer %q, want the afvi-camera prefix (camera.exe renders the images)", meta.Producer)
+				}
+				if meta.Width != s.a.Scene.W || meta.Height != s.a.Scene.H {
+					return nil, fmt.Errorf("studio-save: size %dx%d, want %dx%d", meta.Width, meta.Height, s.a.Scene.W, s.a.Scene.H)
+				}
+				if len(meta.Recipe.Defects) != len(dp.gvStrokes()) {
+					return nil, fmt.Errorf("studio-save: %d recipe defects, want %d", len(meta.Recipe.Defects), len(dp.gvStrokes()))
+				}
+				for _, kind := range []string{snapfmt.KindTest, snapfmt.KindGood} {
+					f, err := snapfmt.ReadImage(dir, meta, "red", kind)
+					if err != nil {
+						return nil, fmt.Errorf("studio-save: %v", err)
+					}
+					if f.Width != s.a.Scene.W || f.Height != s.a.Scene.H {
+						return nil, fmt.Errorf("studio-save: %s image %dx%d, want %dx%d", kind, f.Width, f.Height, s.a.Scene.W, s.a.Scene.H)
+					}
+				}
+				if _, ok := meta.FindImage("green", snapfmt.KindTest); ok {
+					return nil, fmt.Errorf("studio-save: green test image was written")
+				}
+				return map[string]any{"dir": dir, "images": len(meta.Images), "defects": len(meta.Recipe.Defects)}, nil
+			},
+		},
 	)
+	var manualWant *core.GrayImage
+	var manualX, manualY int
+	s.steps = append(s.steps,
+		selftestStep{
+			name: "manual-on", enter: func(a *App) {
+				enterDefect(a)
+				dp := s.panel("defect").(*DefectPanel)
+				dp.liveFollow = false
+				dp.clearUserImage()
+				dp.snapSrc.on = false
+				dp.channel = core.ChRed
+				dp.strokes = nil
+				dp.noise = core.SensorNoise{Seed: 1}
+				dp.paramsOpen = false
+				dp.resetInspect()
+				dp.manual = true
+				dp.renderRev++
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.test == nil {
+					return nil, fmt.Errorf("manual-on: no test image")
+				}
+				if dp.lastReport != nil {
+					return nil, fmt.Errorf("manual-on: report present in manual mode")
+				}
+				if dp.learned[dp.channel] {
+					return nil, fmt.Errorf("manual-on: learned[%v] = true, want false", dp.channel)
+				}
+				return map[string]any{"manual": true}, nil
+			},
+		},
+		selftestStep{
+			name: "manual-inspect", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				dp.requestInspect()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("manual-inspect: no report")
+				}
+				if !dp.learned[dp.channel] {
+					return nil, fmt.Errorf("manual-inspect: not learned")
+				}
+				if !dp.manual {
+					return nil, fmt.Errorf("manual-inspect: manual mode turned off")
+				}
+				if !bytes.Equal(dp.test.Data, simulate(s.a, dp, core.ChRed).Data) {
+					return nil, fmt.Errorf("manual-inspect: test image differs from the simulation")
+				}
+				return map[string]any{"defects": len(dp.lastReport.Defects)}, nil
+			},
+		},
+		selftestStep{
+			name: "manual-load", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				manualWant = simulate(s.a, dp, core.ChRed).Clone()
+				manualX, manualY = dp.findSrPoint()
+				for y := manualY - 7; y <= manualY+7; y++ {
+					if y < 0 || y >= manualWant.Height {
+						continue
+					}
+					for x := manualX - 7; x <= manualX+7; x++ {
+						if x < 0 || x >= manualWant.Width {
+							continue
+						}
+						manualWant.Data[y*manualWant.Width+x] = 255
+					}
+				}
+				if err := os.MkdirAll(s.out, 0o755); err != nil {
+					return
+				}
+				path := filepath.Join(s.out, "manual-image.png")
+				f, err := os.Create(path)
+				if err != nil {
+					return
+				}
+				g := image.NewGray(image.Rect(0, 0, manualWant.Width, manualWant.Height))
+				copy(g.Pix, manualWant.Data)
+				err = png.Encode(f, g)
+				f.Close()
+				if err != nil {
+					return
+				}
+				dp.requestLoadImage(path)
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.user.img == nil {
+					return nil, fmt.Errorf("manual-load: no loaded image")
+				}
+				if !bytes.Equal(dp.user.img.Data, manualWant.Data) {
+					return nil, fmt.Errorf("manual-load: loaded pixels differ from the written file")
+				}
+				if dp.test != dp.user.img {
+					return nil, fmt.Errorf("manual-load: test image is not the loaded image")
+				}
+				if dp.lastReport != nil {
+					return nil, fmt.Errorf("manual-load: report present in manual mode")
+				}
+				if dp.liveFollow {
+					return nil, fmt.Errorf("manual-load: live follow still on")
+				}
+				if dp.snapSrc.on {
+					return nil, fmt.Errorf("manual-load: snap source still on")
+				}
+				return map[string]any{"loaded": true}, nil
+			},
+		},
+		selftestStep{
+			name: "manual-load-inspect", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				dp.requestInspect()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("manual-load-inspect: no report")
+				}
+				hits := 0
+				for _, d := range dp.lastReport.Defects {
+					if d.BBox.X <= manualX && manualX < d.BBox.X+d.BBox.W &&
+						d.BBox.Y <= manualY && manualY < d.BBox.Y+d.BBox.H {
+						hits++
+					}
+				}
+				if hits == 0 {
+					return nil, fmt.Errorf("manual-load-inspect: no defect contains (%d,%d)", manualX, manualY)
+				}
+				return map[string]any{"defects": len(dp.lastReport.Defects), "hits": hits}, nil
+			},
+		},
+		selftestStep{
+			name: "manual-restore", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				dp.clearUserImage()
+				dp.manual = false
+				dp.renderRev++
+				dp.golden, dp.test = nil, nil
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.user.img != nil {
+					return nil, fmt.Errorf("manual-restore: loaded image still present")
+				}
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("manual-restore: no report")
+				}
+				if !bytes.Equal(dp.test.Data, simulate(s.a, dp, core.ChRed).Data) {
+					return nil, fmt.Errorf("manual-restore: test image differs from the simulation")
+				}
+				return map[string]any{"restored": true}, nil
+			},
+		},
+	)
+	s.steps = filterSteps(s.steps, a.profile)
+	if a.live != nil && a.live.cli != nil {
+		// -link was given to the teaching program: the other steps run on the program's own
+		// simulation, and the last step follows the studio that is expected on that address.
+		if dp, ok := s.panel("defect").(*DefectPanel); ok {
+			dp.liveFollow = false
+		}
+		s.steps = append(s.steps, liveSelftestStep(s))
+	}
 	return s
+}
+
+// studioOnlySteps run only in the camera studio; teachOnlySteps only in the teaching program.
+// A step in neither set runs in both.
+var studioOnlySteps = map[string]bool{
+	"light-dark-zh":           true,
+	"interact-measure":        true,
+	"interact-defect-rect":    true,
+	"interact-defect-ellipse": true,
+	"interact-defect-polygon": true,
+	"light-light-ko":          true,
+	"defect-color-red":        true,
+	"defect-color-green":      true,
+	"defect-color-blue":       true,
+	"select-setup":            true,
+	"select-pick":             true,
+	"select-ctrl":             true,
+	"select-rect":             true,
+	"select-edit":             true,
+	"select-caps":             true,
+	"product-variation":       true,
+	"product-off":             true,
+	"product-on":              true,
+	"studio-save":             true,
+}
+
+var teachOnlySteps = map[string]bool{
+	"teach-start":           true,
+	"align-dark-zh":         true,
+	"interact-align-roi":    true,
+	"interact-defect-probe": true,
+	"align-light-ko":        true,
+	"defect-params-dialog":  true,
+	"inspect-good":          true,
+	"inspect-overkill":      true,
+	"inspect-merge":         true,
+	"inspect-miss":          true,
+	"inspect-relearn":       true,
+	"defaults-detected":     true,
+	"edge-margin-off":       true,
+	"edge-margin-on":        true,
+	"snap-camera":           true,
+	"snap-stale":            true,
+	"snap-resnap":           true,
+	"snap-channel":          true,
+	"snap-load":             true,
+	"snap-off":              true,
+	"bg-global-learn":       true,
+	"bg-global-blobs":       true,
+	"bg-local-learn":        true,
+	"bg-local-dots":         true,
+	"manual-on":             true,
+	"manual-inspect":        true,
+	"manual-load":           true,
+	"manual-load-inspect":   true,
+	"manual-restore":        true,
+}
+
+// filterSteps keeps the steps that belong to the profile, in order.
+func filterSteps(steps []selftestStep, p Profile) []selftestStep {
+	out := make([]selftestStep, 0, len(steps))
+	for _, st := range steps {
+		if p == ProfileStudio && teachOnlySteps[st.name] {
+			continue
+		}
+		if p != ProfileStudio && studioOnlySteps[st.name] {
+			continue
+		}
+		out = append(out, st)
+	}
+	return out
 }
 
 // srRmsDelta returns the RMS of the SR-material texture difference between the live scene
@@ -1560,7 +1864,7 @@ func (s *Selftest) AfterRender() {
 	}
 	path := s.pendingShot
 	s.capturing = true
-	if err := captureWindow(WindowTitle, path); err != nil {
+	if err := captureWindow(s.a.profile.WindowTitle(), path); err != nil {
 		s.errors = append(s.errors, filepath.Base(path)+": "+err.Error())
 	} else {
 		s.shots = append(s.shots, path)

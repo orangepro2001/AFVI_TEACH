@@ -18,6 +18,9 @@ type selectionState struct {
 
 // PaletteSupports 报告面板支持的选择工具。
 func (p *DefectPanel) PaletteSupports(t PaletteTool) bool {
+	if p.mode == modeDetect {
+		return false
+	}
 	switch t {
 	case PalettePick, PaletteRect, PaletteEllipse, PalettePolygon:
 		return true
@@ -341,7 +344,7 @@ func (p *DefectPanel) drawSelectionEditor() {
 	}
 	origin, size := p.a.Viewer.Canvas()
 	imgui.SetNextWindowPosV(imgui.NewVec2(origin.X+size.X-330-56, origin.Y+size.Y-372), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(320, 360), imgui.CondFirstUseEver)
+	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(320), sc(360)), imgui.CondFirstUseEver)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings |
 		imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
@@ -355,22 +358,22 @@ func (p *DefectPanel) drawSelectionEditor() {
 	dl := imgui.WindowDrawList()
 	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
 	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+23)
+	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
 	Caption(dl, capMin, capMax, T("defect.sel.title"), true)
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-18, capMin.Y+3))
-	if ButtonSized("x", "sel-close", imgui.NewVec2(16, 14), true) {
+	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
+	if ButtonSized("x", "sel-close", imgui.NewVec2(sc(16), sc(14)), true) {
 		p.clearSelection()
 		imgui.End()
 		return
 	}
 
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+10, wp.Y+30))
-	imgui.BeginChildStrV("##defect-selection-body", imgui.NewVec2(ws.X-20, ws.Y-40), 0, 0)
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(10), wp.Y+sc(30)))
+	imgui.BeginChildStrV("##defect-selection-body", imgui.NewVec2(ws.X-sc(20), ws.Y-sc(40)), 0, 0)
 
 	Note(T("defect.sel.count", "n", fmt.Sprint(len(sel))))
 	if p.renderRev != p.renderedRev {
 		Note(T("defect.sel.stale"))
-	} else {
+	} else if p.mode == modeDetect {
 		found := 0
 		total := 0
 		for _, s := range sel {

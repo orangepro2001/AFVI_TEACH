@@ -26,7 +26,7 @@ func init() {
 			occValue:  0,
 			lastScale: 2,
 		}
-	})
+	}, ProfileTeach)
 	Messages(map[string]string{
 		"align.section.source":         "源图",
 		"align.source.median":          "MEDIAN 原图",

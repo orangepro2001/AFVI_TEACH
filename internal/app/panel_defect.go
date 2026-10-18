@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"math"
+	"path/filepath"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
@@ -11,7 +12,8 @@ import (
 )
 
 func init() {
-	registerPanel(2, func(a *App) Panel { return newDefectPanel(a) })
+	registerPanel(2, func(a *App) Panel { return newDefectPanel(a, modeDetect) }, ProfileTeach)
+	registerPanel(1, func(a *App) Panel { return newDefectPanel(a, modeAuthor) }, ProfileStudio)
 	Messages(map[string]string{
 		"defect.section.channel":           "渲染通道",
 		"defect.section.brush":             "笔刷",
@@ -498,7 +500,8 @@ type strokeEntry struct {
 
 // DefectPanel 移植 teach-app/src/defect-panel.ts 为原生 ImGui 面板。
 type DefectPanel struct {
-	a *App
+	a    *App
+	mode defectMode
 
 	tool              defectTool
 	radius            float64
@@ -556,6 +559,18 @@ type DefectPanel struct {
 	showMarks bool // 绘制模拟笔画轮廓（关闭可对学生隐藏答案）
 
 	snapSrc snapSource
+	studio  studioOutput
+
+	pub          livePublisher // studio: when the scenario was last published over the live link
+	liveFollow   bool          // teach: follow the studio's scenario while it is connected
+	liveSt       liveState     // teach: connection state as of the current frame
+	liveMismatch string        // teach: model of the studio's scenario when it differs from the loaded one
+	inspMsg      statusMsg     // teach: result of the last save/load of the inspection parameter file
+
+	manual     bool      // teach: no automatic learning or inspection (the Inspect button runs it)
+	inspectNow bool      // teach: the next requestRun learns and inspects even in manual mode
+	user       userImage // teach: test image loaded from a file (Load Image)
+	imgMsg     statusMsg // teach: result of the last Load Image
 
 	paramsOpen bool
 
@@ -569,9 +584,10 @@ type DefectPanel struct {
 	dragCur   core.Point
 }
 
-func newDefectPanel(a *App) *DefectPanel {
+func newDefectPanel(a *App, mode defectMode) *DefectPanel {
 	p := &DefectPanel{
 		a:                 a,
+		mode:              mode,
 		tool:              toolNone,
 		radius:            6,
 		deltaGv:           60,
@@ -602,7 +618,8 @@ func newDefectPanel(a *App) *DefectPanel {
 		renderRev:         1,
 		frame:             NewFrameTool(),
 		frameKind:         core.Bright,
-		showMarks:         true,
+		showMarks:         mode == modeAuthor,
+		liveFollow:        mode == modeDetect,
 		learnK:            5,
 		autoCount:         defaultAutoCount,
 		autoSeed:          defaultAutoSeed,
@@ -615,8 +632,14 @@ func newDefectPanel(a *App) *DefectPanel {
 	return p
 }
 
-func (p *DefectPanel) ID() string    { return "defect" }
-func (p *DefectPanel) Title() string { return T("tab.defect") }
+func (p *DefectPanel) ID() string { return "defect" }
+
+func (p *DefectPanel) Title() string {
+	if p.mode == modeAuthor {
+		return T("tab.synth")
+	}
+	return T("tab.defect")
+}
 
 func (p *DefectPanel) Activate() {
 	p.active = true
@@ -660,6 +683,9 @@ func (p *DefectPanel) ModelLoaded() {
 	// 换模型后已学到的区间失效，恢复默认并重新学习。
 	p.learned = [3]bool{}
 	p.relearn = false
+	p.clearUserImage()
+	p.imgMsg = statusMsg{}
+	p.inspectNow = false
 	for i := range p.inspectParams {
 		p.inspectParams[i] = newInspectParams()
 	}
@@ -693,6 +719,7 @@ func (p *DefectPanel) resetInspect() {
 // requestRelearn 保留当前通道的 Size/MinArea/启用设置，仅重新学习区间。
 func (p *DefectPanel) requestRelearn() {
 	p.relearn = true
+	p.inspectNow = true
 }
 
 func (p *DefectPanel) Selftest() {
@@ -797,19 +824,30 @@ func (p *DefectPanel) requestRun() {
 	if scene == nil {
 		return
 	}
+	if p.mode == modeAuthor {
+		p.requestRender()
+		return
+	}
+	inspectNow := p.inspectNow
+	p.inspectNow = false
+	doInspect := !p.manual || inspectNow
+	userImg := p.user.img
 	needRender := p.renderRev != p.renderedRev || p.golden == nil
 	rev := p.renderRev
 	light := a.Light.Clone()
 	ch := p.channel
 	noise := p.noise
 	params := p.inspectParams[ch]
-	needLearn := !p.learned[ch] || p.relearn
+	needLearn := doInspect && (!p.learned[ch] || p.relearn)
 	k := p.learnK
 	viewKind := p.viewKind
 	gv := p.gvStrokes()
 	sc := p.sceneStrokes()
 	golden, test := p.golden, p.test
-	snapOn := p.snapSrc.on && p.snapSrc.meta != nil
+	liveOn := userImg == nil && p.snapSrc.live && p.snapSrc.meta != nil
+	snapOn := userImg == nil && p.snapSrc.on && !p.snapSrc.live && p.snapSrc.meta != nil
+	liveSess, liveRev := p.snapSrc.liveSess, p.snapSrc.liveRev
+	liveCl := p.liveSt.client
 	exe := findCameraExe()
 	srcDir := p.snapSrc.srcDir
 	workDir := p.snapSrc.workDir
@@ -820,7 +858,16 @@ func (p *DefectPanel) requestRun() {
 	}
 	a.Jobs.Run("defect", func() func() {
 		var res snapFetchResult
-		if snapOn {
+		if userImg != nil {
+			test, golden = userImg, nil
+		} else if liveOn {
+			var err error
+			res, err = liveFetch(liveCl, liveRev, have, ch, needLearn, viewKind != "test", scene.W, scene.H)
+			if err != nil {
+				return func() { p.liveFetchFailed(liveSess, liveRev, err) }
+			}
+			test, golden = res.test, res.golden
+		} else if snapOn {
 			var err error
 			res, err = snapFetch(exe, srcDir, snapMeta, have, workDir, ch, needLearn, scene.W, scene.H)
 			if err != nil {
@@ -836,7 +883,9 @@ func (p *DefectPanel) requestRun() {
 		}
 		if needLearn {
 			var good *core.GrayImage
-			if snapOn {
+			if userImg != nil {
+				good = userImg
+			} else if liveOn || snapOn {
 				if res.good == nil {
 					return func() {
 						p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", "good sample missing", true
@@ -853,27 +902,50 @@ func (p *DefectPanel) requestRun() {
 			}
 			params = learnedParams
 		}
-		report, err := inspect.Inspect(inspectImage(test), inspectRegions(scene), params)
-		if err != nil {
-			return func() { a.SetHint(T("common.error", "msg", err.Error())) }
+		var report inspect.Report
+		if doInspect {
+			var err error
+			report, err = inspect.Inspect(inspectImage(test), inspectRegions(scene), params)
+			if err != nil {
+				return func() { a.SetHint(T("common.error", "msg", err.Error())) }
+			}
 		}
 		var pix []byte
-		switch viewKind {
-		case "golden":
+		switch {
+		case viewKind == "golden" && golden != nil:
 			pix = PackGray(golden)
-		case "diff":
+		case viewKind == "diff" && golden != nil:
 			pix = PackSignedDiff(golden, test)
 		default:
 			pix = PackGray(test)
 		}
-		w, h := golden.Width, golden.Height
+		w, h := test.Width, test.Height
 		return func() {
 			if a.Scene != scene {
 				PutRGBA(pix)
 				return
 			}
+			if p.user.img != userImg {
+				PutRGBA(pix)
+				return
+			}
+			if liveOn && (!p.snapSrc.live || p.snapSrc.liveSess != liveSess || p.snapSrc.liveRev != liveRev) {
+				// The studio moved on (or the user left the live source) while this was running;
+				// the run for the newer revision is already queued.
+				PutRGBA(pix)
+				return
+			}
 			p.golden = golden
 			p.test = test
+			if liveOn {
+				if p.snapSrc.frames == nil {
+					p.snapSrc.frames = map[snapKey]*core.GrayImage{}
+				}
+				for k, v := range res.add {
+					p.snapSrc.frames[k] = v
+				}
+				p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "", "", false
+			}
 			if snapOn {
 				if p.snapSrc.frames == nil {
 					p.snapSrc.frames = map[snapKey]*core.GrayImage{}
@@ -890,7 +962,11 @@ func (p *DefectPanel) requestRun() {
 				}
 			}
 			p.renderedRev = rev
-			p.lastReport = &report
+			if doInspect {
+				p.lastReport = &report
+			} else {
+				p.lastReport, p.lastProbe, p.probeRect = nil, nil, nil
+			}
 			if needLearn {
 				p.inspectParams[ch] = params
 				p.learned[ch] = true
@@ -911,11 +987,69 @@ func (p *DefectPanel) requestRun() {
 	})
 }
 
+// requestRender 渲染 golden/test 图对并显示当前视图（key "defect"）；不学习、不检出、
+// 不使用相机抓拍。
+func (p *DefectPanel) requestRender() {
+	a := p.a
+	scene := a.Scene
+	if scene == nil {
+		return
+	}
+	needRender := p.renderRev != p.renderedRev || p.golden == nil
+	rev := p.renderRev
+	light := a.Light.Clone()
+	ch := p.channel
+	noise := p.noise
+	viewKind := p.viewKind
+	gv := p.gvStrokes()
+	sceneStr := p.sceneStrokes()
+	golden, test := p.golden, p.test
+	a.Jobs.Run("defect", func() func() {
+		if needRender {
+			golden, test = core.RenderDefectPair(scene.Light, &light, ch, sceneStr, gv, noise)
+		}
+		var pix []byte
+		switch viewKind {
+		case "golden":
+			pix = PackGray(golden)
+		case "diff":
+			pix = PackSignedDiff(golden, test)
+		default:
+			pix = PackGray(test)
+		}
+		w, h := golden.Width, golden.Height
+		return func() {
+			if a.Scene != scene {
+				PutRGBA(pix)
+				return
+			}
+			p.golden = golden
+			p.test = test
+			p.renderedRev = rev
+			if p.viewKind != viewKind {
+				PutRGBA(pix)
+				p.requestView()
+				return
+			}
+			if p.active {
+				a.Viewer.SetImage(w, h, pix)
+			} else {
+				PutRGBA(pix)
+			}
+		}
+	})
+}
+
 // requestView 从已有 golden/test 重新打包当前视图（key "defect-view"）。
 func (p *DefectPanel) requestView() {
 	a := p.a
 	scene := a.Scene
-	if scene == nil || p.golden == nil || p.test == nil {
+	if scene == nil || p.test == nil {
+		return
+	}
+	if p.golden == nil && p.viewKind != "test" {
+		// A live test image arrives without its golden image; fetch it for the other views.
+		p.requestRun()
 		return
 	}
 	viewKind := p.viewKind
@@ -930,9 +1064,9 @@ func (p *DefectPanel) requestView() {
 		default:
 			pix = PackGray(test)
 		}
-		w, h := golden.Width, golden.Height
+		w, h := test.Width, test.Height
 		return func() {
-			if a.Scene != scene || p.golden != golden {
+			if a.Scene != scene || p.test != test {
 				PutRGBA(pix)
 				return
 			}
@@ -1271,6 +1405,9 @@ func (p *DefectPanel) placeFrame(res FrameResult) {
 
 // handleKeys processes frame-tool keyboard shortcuts (Esc cancels, Backspace undoes).
 func (p *DefectPanel) handleKeys() {
+	if p.mode == modeDetect && imgui.IsKeyPressedBoolV(imgui.KeyF5, false) && !imgui.IsPopupOpenStrV("", imgui.PopupFlagsAnyPopupId) {
+		p.requestInspect()
+	}
 	if p.paramsOpen {
 		// Esc closes the parameter dialog first; the frame tool must not react to it.
 		return
@@ -1293,7 +1430,9 @@ func (p *DefectPanel) handleKeys() {
 
 func (p *DefectPanel) DrawLeft() {
 	p.handleKeys()
-	p.handleSelectKeys()
+	if p.mode == modeAuthor {
+		p.handleSelectKeys()
+	}
 	a := p.a
 	changed := false
 
@@ -1306,15 +1445,19 @@ func (p *DefectPanel) DrawLeft() {
 		}
 	}
 
-	if p.drawSnapSection() {
+	if p.mode == modeDetect {
+		p.drawManualSection()
+		p.drawLiveSection()
+		if p.drawSnapSection() {
+			changed = true
+		}
+	}
+
+	if p.mode == modeAuthor && p.drawVirtualSection() {
 		changed = true
 	}
 
-	if p.drawVirtualSection() {
-		changed = true
-	}
-
-	if Section(T("defect.section.brush"), "defect-brush") {
+	if p.mode == modeAuthor && Section(T("defect.section.brush"), "defect-brush") {
 		tools := []struct {
 			tool  defectTool
 			label string
@@ -1415,7 +1558,7 @@ func (p *DefectPanel) DrawLeft() {
 		}
 	}
 
-	if Section(T("defect.section.frame"), "defect-frame") {
+	if p.mode == modeAuthor && Section(T("defect.section.frame"), "defect-frame") {
 		frameTools := []struct {
 			kind  FrameKind
 			label string
@@ -1446,7 +1589,7 @@ func (p *DefectPanel) DrawLeft() {
 		Note(T("defect.frame.note"))
 	}
 
-	if Section(T("defect.section.color"), "defect-color") {
+	if p.mode == modeAuthor && Section(T("defect.section.color"), "defect-color") {
 		Check(T("defect.color.enable"), "defect-color-enable", &p.useColor)
 		if p.useColor {
 			SliderF64(T("defect.color.r"), "defect-color-r", &p.color[0], 0, 1, "%.2f")
@@ -1473,7 +1616,7 @@ func (p *DefectPanel) DrawLeft() {
 				}
 			}
 			// Colour swatch with a sunken edge.
-			sw := imgui.NewVec2(56, 18)
+			sw := imgui.NewVec2(sc(56), imgui.FrameHeight())
 			pos := imgui.CursorScreenPos()
 			imgui.Dummy(sw)
 			dl := imgui.WindowDrawList()
@@ -1485,7 +1628,7 @@ func (p *DefectPanel) DrawLeft() {
 		Note(T("defect.color.note"))
 	}
 
-	if Section(T("defect.section.amplitude"), "defect-amp") {
+	if p.mode == modeAuthor && Section(T("defect.section.amplitude"), "defect-amp") {
 		amp := int(p.amplitude)
 		if Combo(T("defect.section.amplitude"), "defect-ampmode", &amp, []string{
 			T("defect.amplitude.absolute"), T("defect.amplitude.relative"), T("defect.amplitude.target"),
@@ -1503,7 +1646,7 @@ func (p *DefectPanel) DrawLeft() {
 		}
 	}
 
-	if Section(T("defect.section.profile"), "defect-profile") {
+	if p.mode == modeAuthor && Section(T("defect.section.profile"), "defect-profile") {
 		pr := int(p.profile)
 		if Combo(T("defect.section.profile"), "defect-profilemode", &pr, []string{
 			T("defect.profile.linear"), T("defect.profile.gaussian"),
@@ -1513,14 +1656,14 @@ func (p *DefectPanel) DrawLeft() {
 		SliderF64(T("defect.brush.grain"), "defect-grain", &p.grain, 0, 1, "%.2f")
 	}
 
-	if Section(T("defect.section.params"), "defect-params") {
+	if p.mode == modeDetect && Section(T("defect.section.params"), "defect-params") {
 		if Button(T("defect.params.open"), "defect-params-open") {
 			p.paramsOpen = true
 		}
 		Note(T("defect.params.f1hint"))
 	}
 
-	if SectionClosed(T("defect.section.random"), "defect-random") {
+	if p.mode == modeAuthor && SectionClosed(T("defect.section.random"), "defect-random") {
 		cnt := p.randomCount
 		if SliderInt(T("defect.random.count"), "defect-rcount", &cnt, 1, 200) {
 			p.randomCount = cnt
@@ -1564,7 +1707,7 @@ func (p *DefectPanel) DrawLeft() {
 		}
 	}
 
-	if Section(T("defect.section.noise"), "defect-noise") {
+	if p.mode == modeAuthor && Section(T("defect.section.noise"), "defect-noise") {
 		rs := p.noise.ReadSigma
 		if SliderF64(T("defect.noise.readSigma"), "defect-readsigma", &rs, 0, 20, "%.1f") {
 			p.noise.ReadSigma = rs
@@ -1587,7 +1730,7 @@ func (p *DefectPanel) DrawLeft() {
 	}
 
 	if Section(T("defect.section.tools"), "defect-tools") {
-		if ToolButton(T("defect.tool.probe"), "defect-probe", p.tool == toolProbe) {
+		if p.mode == modeDetect && ToolButton(T("defect.tool.probe"), "defect-probe", p.tool == toolProbe) {
 			p.tool = toolProbe
 			a.SetHint(T("defect.tool.probeHint"))
 		}
@@ -1622,11 +1765,15 @@ func (p *DefectPanel) DrawLeft() {
 	}
 }
 
-// DrawDialogs draws the floating detection-parameter window (F1 toggles it) and the
-// selection editor.
+// DrawDialogs draws the floating window of the mode: the selection editor in the
+// studio (author mode) and the detection-parameter window (F1 toggles it) in the
+// teaching program (detect mode).
 func (p *DefectPanel) DrawDialogs() {
+	if p.mode == modeAuthor {
+		p.drawSelectionEditor()
+		return
+	}
 	p.drawParamsDialog()
-	p.drawSelectionEditor()
 }
 
 // drawParamsDialog draws the floating detection-parameter window (F1 toggles it).
@@ -1642,7 +1789,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	}
 	vp := imgui.MainViewport()
 	imgui.SetNextWindowPosV(imgui.NewVec2(vp.Pos().X+356, vp.Pos().Y+120), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(430, 560), imgui.CondFirstUseEver)
+	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(430), sc(560)), imgui.CondFirstUseEver)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings |
 		imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
@@ -1656,15 +1803,15 @@ func (p *DefectPanel) drawParamsDialog() {
 	dl := imgui.WindowDrawList()
 	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
 	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+23)
+	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
 	Caption(dl, capMin, capMax, T("defect.params.title"), true)
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-18, capMin.Y+3))
-	if ButtonSized("x", "defect-params-close", imgui.NewVec2(16, 14), true) {
+	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
+	if ButtonSized("x", "defect-params-close", imgui.NewVec2(sc(16), sc(14)), true) {
 		p.paramsOpen = false
 	}
 
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+10, wp.Y+30))
-	imgui.BeginChildStrV("##defect-params-body", imgui.NewVec2(ws.X-20, ws.Y-40), 0, 0)
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(10), wp.Y+sc(30)))
+	imgui.BeginChildStrV("##defect-params-body", imgui.NewVec2(ws.X-sc(20), ws.Y-sc(40)), 0, 0)
 	rerun := false
 	ch := int(p.channel)
 	params := &p.inspectParams[ch]
@@ -1681,6 +1828,15 @@ func (p *DefectPanel) drawParamsDialog() {
 		rerun = true
 	}
 	Note(T("defect.insp.learnNote"))
+	if Button(T("defect.insp.saveFile"), "insp-save") {
+		p.saveParamsFile()
+	}
+	imgui.SameLine()
+	if Button(T("defect.insp.loadFile"), "insp-load") && p.loadParamsFile() {
+		rerun = true
+	}
+	Note(T("defect.insp.fileNote", "path", filepath.Join(p.sessionDir(), inspect.ParamsFileName)))
+	p.inspMsg.draw()
 	em := params.EdgeMargin
 	if SliderInt(T("defect.insp.edgeMargin"), "insp-edge", &em, 0, inspect.MaxEdgeMargin) {
 		for i := range p.inspectParams {
@@ -1760,6 +1916,10 @@ func (p *DefectPanel) drawParamsDialog() {
 }
 
 func (p *DefectPanel) DrawRight() {
+	if p.mode == modeAuthor {
+		p.drawOutputPanel()
+		return
+	}
 	a := p.a
 	if Section(T("defect.section.result"), "defect-result") {
 		if p.lastReport == nil {
@@ -1994,6 +2154,9 @@ func (p *DefectPanel) Pointer(ev PointerEvent) bool {
 		return owned
 	}
 	if p.tool == toolNone {
+		if p.mode == modeDetect {
+			return false
+		}
 		return p.selectPointer(ev)
 	}
 	switch ev.Kind {

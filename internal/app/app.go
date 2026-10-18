@@ -45,15 +45,30 @@ type Panel interface {
 type DialogPanel interface{ DrawDialogs() }
 
 type panelCtor struct {
-	order int
-	make  func(*App) Panel
+	order    int
+	make     func(*App) Panel
+	profiles []Profile
 }
 
 var panelCtors []panelCtor
 
 // registerPanel is called from each panel file's init(); order sets the tab position.
-func registerPanel(order int, make func(*App) Panel) {
-	panelCtors = append(panelCtors, panelCtor{order: order, make: make})
+// profiles restricts the panel to those profiles; an empty list allows every profile.
+func registerPanel(order int, make func(*App) Panel, profiles ...Profile) {
+	panelCtors = append(panelCtors, panelCtor{order: order, make: make, profiles: profiles})
+}
+
+// allows reports whether the panel is part of profile p.
+func (c panelCtor) allows(p Profile) bool {
+	if len(c.profiles) == 0 {
+		return true
+	}
+	for _, prof := range c.profiles {
+		if prof == p {
+			return true
+		}
+	}
+	return false
 }
 
 // DisplayChannel selects which rendered camera channel the light view shows.
@@ -73,6 +88,7 @@ type App struct {
 	Cfg        *config.Config
 	CfgPath    string
 	machineIdx int
+	profile    Profile
 
 	RefRoot  string
 	Models   []ModelInfo
@@ -109,16 +125,19 @@ type App struct {
 
 	cfgDlg    configDialog
 	aboutOpen bool
+
+	live *liveLink // the live link to the other program (nil = off)
 }
 
 // NewApp builds the app state and panels; the window/backend is attached by main. The
 // active machine comes from cfg and its models are scanned immediately (main decides
 // which model to open first).
-func NewApp(cfg *config.Config, cfgPath string, theme string) *App {
+func NewApp(cfg *config.Config, cfgPath string, theme string, profile Profile) *App {
 	a := &App{
 		Cfg:      cfg,
 		CfgPath:  cfgPath,
 		modelIdx: -1,
+		profile:  profile,
 		Light:    core.DefaultLightSetting(),
 		Viewer:   NewViewer(),
 		theme:    theme,
@@ -128,6 +147,9 @@ func NewApp(cfg *config.Config, cfgPath string, theme string) *App {
 	a.Jobs = NewJobs(func(err error) { a.SetHint(T("common.error", "msg", err.Error())) })
 	sort.SliceStable(panelCtors, func(i, j int) bool { return panelCtors[i].order < panelCtors[j].order })
 	for _, c := range panelCtors {
+		if !c.allows(profile) {
+			continue
+		}
 		a.panels = append(a.panels, c.make(a))
 	}
 	a.machineIdx = cfg.ActiveIndex()
@@ -298,6 +320,7 @@ func (a *App) Frame() {
 			a.elapsedMs = t.Ms
 		}
 	}
+	a.tickPanels()
 	if a.appliedTheme != a.theme {
 		ApplyTheme(a.theme)
 		a.appliedTheme = a.theme
@@ -310,8 +333,8 @@ func (a *App) Frame() {
 	vp := imgui.MainViewport()
 	pos, size := vp.Pos(), vp.Size()
 	menuH := imgui.FrameHeight()
-	const toolH, statusH = 34, 24
-	leftW, rightW := float32(340), float32(380)
+	toolH, statusH := sc(34), sc(24)
+	leftW, rightW := sc(340), sc(380)
 	if a.focusView {
 		leftW, rightW = 0, 0
 	}
@@ -489,7 +512,7 @@ func (a *App) drawAbout() {
 	vp := imgui.MainViewport()
 	center := imgui.NewVec2(vp.Pos().X+vp.Size().X/2, vp.Pos().Y+vp.Size().Y/2)
 	imgui.SetNextWindowPosV(center, imgui.CondAlways, imgui.NewVec2(0.5, 0.5))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(360, 170), imgui.CondAlways)
+	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(360), sc(170)), imgui.CondAlways)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
 		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoScrollbar
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
@@ -502,23 +525,27 @@ func (a *App) drawAbout() {
 	dl := imgui.WindowDrawList()
 	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
 	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+23)
-	Caption(dl, capMin, capMax, T("about.title"), true)
+	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
+	titleKey, textKey := "about.title", "about.text"
+	if a.profile == ProfileStudio {
+		titleKey, textKey = "about.title.studio", "about.text.studio"
+	}
+	Caption(dl, capMin, capMax, T(titleKey), true)
 
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+16, wp.Y+40))
-	imgui.TextUnformatted(WindowTitle)
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+16, wp.Y+62))
-	imgui.TextUnformatted(T("about.text"))
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+16, wp.Y+84))
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(40)))
+	imgui.TextUnformatted(a.profile.WindowTitle())
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(62)))
+	imgui.TextUnformatted(T(textKey))
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(84)))
 	imgui.TextUnformatted("Dear ImGui " + imgui.Version())
 
 	okLabel := T("cfg.ok")
 	okW := ButtonWidth(okLabel)
-	if okW < 75 {
-		okW = 75
+	if okW < sc(75) {
+		okW = sc(75)
 	}
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+ws.X-16-okW, wp.Y+170-30))
-	if ButtonSized(okLabel, "about-ok", imgui.NewVec2(okW, 23), true) {
+	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+ws.X-sc(16)-okW, wp.Y+sc(170)-sc(30)))
+	if ButtonSized(okLabel, "about-ok", imgui.NewVec2(okW, imgui.FrameHeight()+2), true) {
 		imgui.CloseCurrentPopup()
 	}
 	if imgui.IsKeyPressedBool(imgui.KeyEscape) {
@@ -563,7 +590,7 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(T("top.machine"))
 	imgui.SameLine()
-	imgui.SetNextItemWidth(190)
+	imgui.SetNextItemWidth(sc(190))
 	machinePreview := ""
 	if a.Cfg != nil && a.machineIdx >= 0 && a.machineIdx < len(a.Cfg.Machines) {
 		m := a.Cfg.Machines[a.machineIdx]
@@ -589,7 +616,7 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 	}
 	ItemEdge(EdgeSunken)
 	imgui.SameLine()
-	if ButtonSized("…", "cfg-open", imgui.NewVec2(26, imgui.FrameHeight()), true) {
+	if ButtonSized("…", "cfg-open", imgui.NewVec2(sc(26), imgui.FrameHeight()), true) {
 		a.OpenConfigDialog()
 	}
 	ToolbarSeparator()
@@ -598,7 +625,7 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(T("top.model"))
 	imgui.SameLine()
-	imgui.SetNextItemWidth(220)
+	imgui.SetNextItemWidth(sc(220))
 	preview := ""
 	if a.modelIdx >= 0 {
 		preview = a.Models[a.modelIdx].ID + " · " + a.Models[a.modelIdx].Version
@@ -663,11 +690,11 @@ func (a *App) drawStatus(x, y, w, h float32) {
 
 	xyW := imgui.CalcTextSize("XY 00000, 00000").X + 16
 	gvW := imgui.CalcTextSize(gv).X + 16
-	if gvW < 130 {
-		gvW = 130
+	if gvW < sc(130) {
+		gvW = sc(130)
 	}
-	zoomW := float32(100)
-	elapsedW := float32(130)
+	zoomW := sc(100)
+	elapsedW := sc(130)
 	fpsW := imgui.CalcTextSize("999 fps | heap 9999 MB").X + 16
 	const gap = 2
 	hintW := w - xyW - gvW - zoomW - elapsedW - fpsW - 5*gap

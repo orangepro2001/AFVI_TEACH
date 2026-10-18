@@ -22,6 +22,9 @@ afvi.toml
 # Build outputs
 bin/
 
+# Generated Windows resource objects (scripts/build-wsl.sh and scripts/build.ps1 run windres)
+*.syso
+
 # Self-test outputs
 selftest-out/
 selftest-output/

@@ -10,7 +10,7 @@ import (
 )
 
 func init() {
-	registerPanel(0, func(a *App) Panel { return &LightPanel{a: a} })
+	registerPanel(0, func(a *App) Panel { return &LightPanel{a: a} }, ProfileStudio)
 	Messages(map[string]string{
 		"light.section.light":       "光源",
 		"light.section.channel":     "相机通道",
@@ -307,7 +307,7 @@ func (p *LightPanel) DrawLeft() {
 			}
 			imgui.AlignTextToFramePadding()
 			imgui.TextUnformatted(name)
-			imgui.SameLineV(labelWidth, -1)
+			imgui.SameLineV(labelWidth(), -1)
 			imgui.SetNextItemWidth(-1)
 			v := int32(ch.Value)
 			if imgui.SliderIntV("##val", &v, 0, 1024, "%d", imgui.SliderFlagsAlwaysClamp) {
@@ -418,7 +418,7 @@ func (p *LightPanel) DrawRight() {
 			if a.Display != DisplayRGB {
 				highlight = int(math.Round(stats[0].stats.Mean))
 			}
-			Histogram("light", &stats[0].stats.Histogram, highlight, 130)
+			Histogram("light", &stats[0].stats.Histogram, highlight, sc(130))
 		}
 	}
 	if Section(T("light.section.material"), "light-material") {

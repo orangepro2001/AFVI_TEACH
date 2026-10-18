@@ -39,6 +39,15 @@ type snapSource struct {
 
 	checkedRev uint64 // panel renderRev for which stale was computed
 	stale      bool
+
+	pathAuto bool // path still follows the default folder of the model (the user has not edited it)
+
+	// Live source: the frames come from the camera studio over the live link, not from files.
+	// on is true as well; meta is the studio's description of the revision.
+	live      bool
+	liveSess  string    // studio session of the adopted scene
+	liveRev   int64     // revision of the adopted scene (0 = ask again after liveRetry)
+	liveRetry time.Time // no new adoption before this time (after a failed fetch)
 }
 
 // snapFetchResult is what a background fetch returns to the UI thread.
@@ -48,6 +57,7 @@ type snapFetchResult struct {
 	add      map[snapKey]*core.GrayImage
 	test     *core.GrayImage
 	good     *core.GrayImage // nil when wantGood was false
+	golden   *core.GrayImage // live source only: nil unless the golden image was wanted
 	rendered bool            // the camera program was run
 }
 
@@ -255,6 +265,8 @@ func (p *DefectPanel) requestSnap() {
 				os.RemoveAll(work)
 				return
 			}
+			p.leaveLive()
+			p.clearUserImage()
 			p.dropSnapDirs(work)
 			p.ownDir(work)
 			p.snapSrc.srcDir = work
@@ -303,12 +315,21 @@ func (p *DefectPanel) requestSnapLoad(path string) {
 				p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", err.Error(), true
 			}
 		}
+		pf, pmsg := readSessionParams(dir, scene)
 		return func() {
 			if a.Scene != scene {
 				if res.workDir != "" {
 					os.RemoveAll(res.workDir)
 				}
 				return
+			}
+			p.leaveLive()
+			p.clearUserImage()
+			if pf != nil {
+				p.applyParamsFile(pf)
+			}
+			if pmsg.key != "" {
+				p.inspMsg = pmsg
 			}
 			wasOwned := p.isOwned(dir)
 			p.dropSnapDirs(dir)
@@ -349,7 +370,7 @@ func (p *DefectPanel) requestSnapLoad(path string) {
 
 // snapStale reports whether the scenario changed since the capture was taken.
 func (p *DefectPanel) snapStale() bool {
-	if !p.snapSrc.on || p.snapSrc.meta == nil || p.a.Scene == nil {
+	if !p.snapSrc.on || p.snapSrc.live || p.snapSrc.meta == nil || p.a.Scene == nil {
 		return false
 	}
 	if p.renderRev != p.snapSrc.checkedRev {
@@ -373,8 +394,8 @@ func (p *DefectPanel) setSnapOff() {
 // resetSnap drops the adopted capture and its app-owned folders.
 func (p *DefectPanel) resetSnap() {
 	p.dropSnapDirs("")
-	path := p.snapSrc.path
-	p.snapSrc = snapSource{path: path}
+	path, auto := p.snapSrc.path, p.snapSrc.pathAuto
+	p.snapSrc = snapSource{path: path, pathAuto: auto}
 }
 
 // ownDir registers dir as an app-owned temporary folder of the adopted capture.
@@ -434,7 +455,12 @@ func (p *DefectPanel) drawSnapSection() bool {
 	}
 	on := p.snapSrc.on
 	if Check(T("defect.snap.use"), "snap-on", &on) {
-		if on {
+		switch {
+		case p.snapSrc.live:
+			p.setLiveFollow(false) // unchecking the live source returns to the simulation
+		case on:
+			p.clearUserImage()
+			p.liveFollow = false // a capture chosen by hand is not replaced by the live image
 			if p.snapSrc.meta == nil {
 				p.requestSnap()
 			} else {
@@ -442,7 +468,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 				p.renderRev++
 				changed = true
 			}
-		} else {
+		default:
 			p.setSnapOff()
 		}
 	}
@@ -450,10 +476,21 @@ func (p *DefectPanel) drawSnapSection() bool {
 	if ButtonSized(T("defect.snap.button"), "snap-go", imgui.NewVec2(ButtonWidth(T("defect.snap.button")), imgui.FrameHeight()+2), enabled) {
 		p.requestSnap()
 	}
-	InputText(T("defect.snap.path"), "snap-path", &p.snapSrc.path, T("defect.snap.pathHint"))
+	if p.snapSrc.pathAuto || strings.TrimSpace(p.snapSrc.path) == "" {
+		p.snapSrc.path, p.snapSrc.pathAuto = defaultCaptureDir(p.a.Scene), true
+	}
+	if InputText(T("defect.snap.path"), "snap-path", &p.snapSrc.path, T("defect.snap.pathHint")) {
+		p.snapSrc.pathAuto = false
+	}
 	if Button(T("defect.snap.load"), "snap-load") {
 		p.requestSnapLoad(p.snapSrc.path)
 	}
+	imgui.SameLine()
+	saveLabel := T("defect.snap.save")
+	if ButtonSized(saveLabel, "snap-save", imgui.NewVec2(ButtonWidth(saveLabel), imgui.FrameHeight()+2), !p.a.Jobs.Busy("session-save")) {
+		p.requestSaveSession()
+	}
+	Note(T("defect.save.note"))
 	if p.snapSrc.meta != nil {
 		m := p.snapSrc.meta
 		names := make([]string, 0, len(p.snapSrc.frames))
@@ -461,8 +498,12 @@ func (p *DefectPanel) drawSnapSection() bool {
 			names = append(names, snapfmt.ChannelName(k.ch)+"-"+k.kind)
 		}
 		sort.Strings(names)
+		folder := p.snapSrc.srcDir
+		if p.snapSrc.live {
+			folder = T("defect.live.srcLive", "rev", fmt.Sprint(p.snapSrc.liveRev))
+		}
 		rows := [][2]string{
-			{T("defect.snap.folder"), p.snapSrc.srcDir},
+			{T("defect.snap.folder"), folder},
 			{T("defect.snap.producer"), m.Producer},
 			{T("defect.snap.created"), m.Created},
 			{T("defect.snap.model"), m.Model.ID},
@@ -475,7 +516,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 	if p.snapStale() {
 		Warn(T("defect.snap.stale"))
 	}
-	if p.snapSrc.msgKey != "" {
+	if p.snapSrc.msgKey != "" && !strings.HasPrefix(p.snapSrc.msgKey, "defect.live.") {
 		text := T(p.snapSrc.msgKey, "msg", p.snapSrc.msgText)
 		if p.snapSrc.msgErr {
 			Warn(text)
@@ -483,6 +524,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 			Note(text)
 		}
 	}
+	p.inspMsg.draw()
 	return changed
 }
 

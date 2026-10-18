@@ -2,7 +2,7 @@
 
 ## 简介
 
-本文档介绍 Color AFVI Master Teach 原生实现（teach-imgui）：Go + Dear ImGui（cimgui-go v1.6.1 / ImGui 1.93 WIP，GLFW + OpenGL3 后端），取代 teach-app 的 WebView2 外壳。teach-app 与 teach-core 仍保留在仓库中，作为规格说明与对照实现。
+本文档介绍 Color AFVI Master Teach 原生实现：Go + Dear ImGui（cimgui-go v1.6.1 / ImGui 1.93 WIP，GLFW + OpenGL3 后端），取代 teach-app 的 WebView2 外壳。同一个模块构建两个 GUI 程序——教学程序 **teach-imgui.exe**（对齐页与缺陷检出页）与相机合成工作室 **camera-gui.exe**（光照与 GV 页、缺陷合成页，camera.exe 的 GUI 前端）——以及命令行相机程序 **camera.exe**。teach-app 与 teach-core 仍保留在仓库中，作为规格说明与对照实现。
 
 界面采用经典 Win32（"Windows Classic"）外观：凸起按钮、凹陷输入框、蚀刻分组框等 3D 立体边框，灰色面板底色，深蓝渐变对话框标题栏，属性表风格页签，以及真正的菜单栏、工具栏和多窗格状态栏（含尺寸手柄）。默认主题为经典浅灰（`light`），深色主题（`dark`）沿用同一套立体边框方案，只是换成深灰配色。实现分布在 `internal/app/theme.go`（调色板与样式）、`internal/app/win32.go`（`DrawEdge`、`Caption`、`HotText` 等立体边框原语）、`internal/app/widgets.go`（自绘按钮、`GroupBox`、`TabStrip` 等控件）与 `internal/app/app.go`（菜单栏 / 工具栏 / 页签 / 状态栏布局）。
 
@@ -33,11 +33,13 @@
 | `-theme dark\|light` | 界面主题（默认：配置文件，否则 `light`） |
 | `-lang zh\|en\|ko` | 界面语言（默认：配置文件，否则 `zh`） |
 | `-model FM1/25fbo015-15` | 启动时打开的型号 |
+| `-fontsize <10-28>` | 界面字号（像素，默认 16；布局常量按字号缩放） |
+| `-link <地址>` | 实时联机地址：工作室监听它，教学程序拨它；默认 `127.0.0.1:47631`；只写端口号等于 `127.0.0.1:<端口>`；`off` 关闭（见 [LINK.md](LINK.md)） |
 | `-selftest` | 自测模式：遍历所有页签、主题与语言，保存截图与指标后退出 |
 | `-out <目录>` | 自测输出目录 |
 | `-exitafter 12s` | 指定时长后自动关闭窗口 |
 
-环境变量 `AFVI_CAMERA_EXE` 可指定 `camera.exe` 的路径；未设置时按教学程序 exe 同级、PATH 顺序查找。
+环境变量 `AFVI_CAMERA_EXE` 可指定 `camera.exe` 的路径；未设置时按教学程序 exe 同级、PATH 顺序查找。环境变量 `AFVI_LINK` 等价于 `-link`（命令行优先）。`-selftest` 默认不联机，显式给出 `-link` 才联机。
 
 配置文件查找顺序：`-config <文件>` → 环境变量 `AFVI_CONFIG` → exe 同级的 `afvi.toml` → 工作目录的 `afvi.toml`。没有任何配置文件时，应用按旧的 reference 查找顺序（`-ref` → 环境变量 `AFVI_REFERENCE_DIR` → exe 目录及向上 5 级的 `reference/` → 工作目录及向上 5 级的 `reference/`）模拟一台名为 `REFERENCE`（地址 `localhost`）的机台。
 
@@ -83,7 +85,46 @@
   - 缺陷页的标准图 / 差异图只是仿真的显示辅助，检出本身从不接收标准图
 - 菜单栏：文件（机台配置…、重新扫描型号、退出）、视图（主题、语言、适应窗口）、帮助（关于…）
 - 工具栏：机台下拉框 + `…` 按钮、型号下拉框、加载状态
-- 页签：切换光照 / 对齐 / 缺陷页，切换均不重载
+- 页签：教学程序为对齐 / 缺陷检出页，工作室为光照与 GV / 缺陷合成页，切换均不重载
+
+## 相机合成工作室（camera-gui.exe）
+
+`camera-gui.exe` 是 `camera.exe` 的 GUI 前端，把原始 MEDIAN 图像处理成合成抓拍，窗口标题为 "Color AFVI Camera Studio"。它包含「光照与 GV」页（亮度调节、GV 测量）与「缺陷合成」页（渲染通道、虚拟良品、笔刷、画框工具、颜色、幅度、轮廓、随机不良、传感器噪声、测试图/标准图/差异图、选择面板与浮动编辑器、可见的笔画轮廓）；它从不运行检出。
+
+右侧「输出」栏把当前场景保存成抓拍：
+
+- 输出文件夹：默认 exe 同级的 `captures/<型号 id>`（`/` 替换为 `-`）。
+- 通道复选框 Red/Green/Blue：至少选择一个。
+- 「同时输出良品样本」：额外写出 `red-good.png` 等不含不良的良品样本，供教学程序学习区间。
+- 「仅输出描述文件」：只写 `snap.json.gz`（几 KB），任何消费者都能据此确定性地重新合成完全相同的像素。
+- 「保存抓拍」：运行 `camera.exe`（在 exe 同级或由 `AFVI_CAMERA_EXE` 指定）并写出 `snap.json` 与各通道 PNG；下方显示场景摘要与最近一次保存。
+
+交接给教学程序：**默认不需要保存文件**——同时打开 camera-gui.exe 与 teach-imgui.exe（先后顺序无关），在工作室里画缺陷，教学程序的缺陷检出页约 0.1 秒后就显示并检出它（见下面的「实时联机」）。「保存抓拍」仍可用，用来留一份文件；教学程序也可以自己把看到的画面保存下来。
+
+「输出」栏里的「实时联机」分组显示监听地址、已连接的教学程序和当前修订；端口被占用时显示原因，程序照常运行（用 `-link` 换一个端口，教学程序也要用同一个地址）。
+
+## 实时联机
+
+两个 GUI 通过本机端口通信（协议与格式见 [LINK.md](LINK.md)）。教学程序缺陷页左侧的「实时联机」分组：
+
+- 连接状态：已连接工作室（程序名与 PID）或"等待相机工作室…"，每 2 秒自动重连，工作室中途重启也会接上。
+- 复选框 **跟随相机工作室**（默认勾选）：工作室每发布一个新修订就把它作为测试图并重新检出；只取像素，不同步工作室的光照、虚拟良品或笔画。已学到的区间保留（所以改光照后能看到过检 / 漏检），要用新场景的良品样本重新学习就点 F1 里的「重新学习区间」。
+- 测试图来源：工作室（实时，修订号）、抓拍文件夹或本程序的本地仿真；标准图 / 差异图视图会按需向工作室再取一张干净渲染。
+- 工作室打开的型号与教学程序当前型号不同时不跟随，给出「切换到该型号」按钮。
+- 「抓拍」「载入」或勾选「使用相机抓拍图像」会停止跟随，免得你选的文件被实时画面替换；取消勾选「跟随相机工作室」回到本地仿真。
+- 连接中断时保留最后一张图。
+
+### 保存与载入
+
+「相机抓拍」分组里的路径框默认是 `captures\<型号 id>`（exe 同级，与工作室输出栏相同；改过之后不再自动变）：
+
+- **保存**：写入 `snap.json`、三个通道的测试图与良品图，以及 `inspect.json`（每个通道的学习区间、尺寸、最小面积、边缘忽略、局部背景等检出参数）。
+- **载入**：读入该文件夹并恢复其中的 `inspect.json`（型号与尺寸相符时），已学习的区间不再重新学习。
+- F1 检出参数窗口里的「保存检出参数 / 载入检出参数」只读写 `inspect.json`。
+
+## 手动控制（检出 / 载入图像）
+
+教学程序缺陷页左侧面板里，紧跟相机通道分组之后是「手动控制」分组：复选框「手动模式（改动后不自动检出）」默认关闭；打开后换通道、改光照、改参数或换图只刷新测试图并清除旧结果，按「检出」（F5）才学习并检出。「载入图像…」打开 Windows 打开文件对话框，载入 PNG/JPEG/BMP/TIFF（转成 8 位灰度，尺寸必须与型号一致）作为测试图；它取代实时联机、相机抓拍与本地仿真，并停止「跟随相机工作室」，按「改用仿真」或重新 Snap / 载入抓拍即可换回。载入的图像没有良品样本，学习（首次检出或「重新学习区间」）用它自己；标准图 / 差异图视图显示测试图；「保存」此时只写 `inspect.json`。详见 [MANUAL.md](MANUAL.md)。
 
 ## 相机抓拍（Snap）
 
@@ -108,10 +149,16 @@ bin/camera -info capture/snap.json
 
 ## 目录结构
 
-- `cmd/teach-imgui/main.go`：入口
-- `internal/app/run.go`：命令行参数、字体、窗口、主循环
+- `cmd/teach-imgui/main.go`：教学程序入口
+- `cmd/camera-gui/main.go`：相机合成工作室入口
+- `internal/app/run.go`：命令行参数、字体、窗口、主循环（`Run` / `RunStudio`）
+- `internal/app/profile.go`：Profile（教学 / 工作室）、窗口标题、DefectPanel 的检出 / 合成模式
+- `internal/app/scale.go`：`SetFontPx` 与 `sc()`，按界面字号缩放硬编码像素长度
+- `internal/app/studio_capture.go`：工作室「输出」栏与 `requestSaveCapture`
+- `internal/app/live*.go`、`internal/app/teach_save.go`：实时联机（发布、跟随、保存 / 载入）
+- `internal/link/`：实时联机契约（协议、Server、Client；仅标准库与 snap）
 - `internal/core/`：仿真（teach-core 的 Go 移植：gray、rng、light、warp、align、defect 涂抹与渲染，以及虚拟良品 `product.go` 与笔画几何 `strokegeom.go`）
-- `internal/inspect/`：检出算法（只看测试图与设计材质图，含单元测试与隔离测试）
+- `internal/inspect/`：检出算法（只看测试图与设计材质图，含检出参数文件 `paramsio.go`、单元测试与隔离测试）
 - `internal/config/`：纯 Go 的 TOML 子集配置包（含测试：`go test ./internal/config/...`）
 - `internal/model/`：模型扫描与加载（纯 Go，含 `modeltest` 合成参考树）
 - `internal/snap/`：抓拍文件格式（`snap.json` + 灰度 PNG，仅标准库与 core）
@@ -143,9 +190,9 @@ bin/camera -info capture/snap.json
 
 ## 验证
 
-- `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...`：配置包 16 个测试 + 核心 73 个测试 + 检出 31 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试（逐个移植 TS 单测 + RNG/颗粒哈希逐位对照 + 并行与串行一致；核心的 73 个 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 31 个 = 原有 21 个 + 10 个局部背景测试（含逐材质开关）（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性）；检出测试覆盖区间、过检、Metal/SR 分离、区间过宽漏检、Size 合并、MinArea、统计、分组与碎块数的暴力对照、膨胀、连通标记、学习、参数校验、探查与隔离）。
+- `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/...`：配置包 16 个测试 + 核心 73 个测试 + 检出 35 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试（逐个移植 TS 单测 + RNG/颗粒哈希逐位对照 + 并行与串行一致；核心的 73 个 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 35 个 = 原有 21 个 + 10 个局部背景测试（含逐材质开关）+ 4 个检出参数文件测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性）；检出测试覆盖区间、过检、Metal/SR 分离、区间过宽漏检、Size 合并、MinArea、统计、分组与碎块数的暴力对照、膨胀、连通标记、学习、参数校验、探查与隔离）。
 - 跨语言一致性（在 reference 25fbo015-15 上，Go 与 TS 各输出摘要后比对）：16 个检查段 0 差异；扭曲图（含弯曲、模糊、噪声、遮挡）与加噪缺陷测试图与 TS 逐字节相同；对齐结果与 Web 版一致（tx −0.59、ty −0.33、真值误差均值 0.532 px）。检出算法是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
-- `-selftest`：加载型号后依次走三页 × 深浅主题 × 三语截图，并注入合成鼠标输入断言：滚轮缩放 ×1.2、中键平移 (80, −40) px、拖框测量尺寸、对齐页新建 ROI 并重跑、缺陷页画亮块后重新渲染检出、探查得到结果，以及 Shift+左键放大 ×1.5 / Shift+右键缩小 ÷1.5、缺陷页椭圆与钢笔多边形创建、彩色不良在三个渲染通道下的亮度差异（红色不良只在 Red 通道变化等）；另断言五个检出步骤：良品学习（标记像素很少）、区间收紧后良品被标记（过检）、Size 变大后缺陷数减少且碎块合并而越界像素数不变、区间过宽时画出的不良被漏检、重新学习后该不良又被检出；还断言悬浮工具面板的逐页能力与对齐页的工具映射、专注模式把画布加宽（测试窗口下 856 → 1584 像素）并能切回、点选 / Ctrl 加选 / 矩形框选、编辑选择会改变可检出性，以及虚拟良品（`product-variation` RMS ≥ 0.05、`product-off` 恢复原始纹理 RMS 0、`product-on`）、`defaults-detected`（10 个默认笔画很小、≥ 9 个被检出、额外缺陷 ≤ 6）、`edge-margin-off`（> 20 个缺陷）/ `edge-margin-on`（≤ 20 个），以及相机抓拍：`snap-camera`（抓拍图与进程内渲染逐字节相同、10 个默认笔画被检出）、`snap-stale`（编辑后报告过期）、`snap-resnap`（重新抓拍后不再过期且图像改变）、`snap-channel`（按需渲染绿色通道）、`snap-load`（读入抓拍并导入笔画）、`snap-off`（临时文件夹被删除；需要 `camera.exe` 与 `teach-imgui.exe` 放在一起，自测时限 300 s）；并断言局部背景：`bg-global-learn`（半径 0 时学习区间）、`bg-global-blobs`（金属上限 = 均值 + 22 时出现面积 ≥ 5000 的巨大缺陷）、`bg-local-learn`（半径 2 时学到的金属下限 ≥ 30，不再是盲的）、`bg-local-dots`（半径 2 时缺陷数 ≥ 20、最大面积 ≤ 400、标记像素不到全局区间的 1/10）；并截取检出参数窗口截图；共 51 个步骤，输出 `native-metrics.json` 与 19 张截图（原 13 张加 palette-light、palette-focus、defect-virtual、defect-edge-off、defect-snap、defect-snap-stale）。
+- `-selftest`：加载型号后依次走三页 × 深浅主题 × 三语截图，并注入合成鼠标输入断言：滚轮缩放 ×1.2、中键平移 (80, −40) px、拖框测量尺寸、对齐页新建 ROI 并重跑、缺陷页画亮块后重新渲染检出、探查得到结果，以及 Shift+左键放大 ×1.5 / Shift+右键缩小 ÷1.5、缺陷页椭圆与钢笔多边形创建、彩色不良在三个渲染通道下的亮度差异（红色不良只在 Red 通道变化等）；另断言五个检出步骤：良品学习（标记像素很少）、区间收紧后良品被标记（过检）、Size 变大后缺陷数减少且碎块合并而越界像素数不变、区间过宽时画出的不良被漏检、重新学习后该不良又被检出；还断言悬浮工具面板的逐页能力与对齐页的工具映射、专注模式把画布加宽（测试窗口下 856 → 1584 像素）并能切回、点选 / Ctrl 加选 / 矩形框选、编辑选择会改变可检出性，以及虚拟良品（`product-variation` RMS ≥ 0.05、`product-off` 恢复原始纹理 RMS 0、`product-on`）、`defaults-detected`（10 个默认笔画很小、≥ 9 个被检出、额外缺陷 ≤ 6）、`edge-margin-off`（> 20 个缺陷）/ `edge-margin-on`（≤ 20 个），以及相机抓拍：`snap-camera`（抓拍图与进程内渲染逐字节相同、10 个默认笔画被检出）、`snap-stale`（编辑后报告过期）、`snap-resnap`（重新抓拍后不再过期且图像改变）、`snap-channel`（按需渲染绿色通道）、`snap-load`（读入抓拍并导入笔画）、`snap-off`（临时文件夹被删除；需要 `camera.exe` 与 `teach-imgui.exe` 放在一起，自测时限 300 s）；并断言局部背景：`bg-global-learn`（半径 0 时学习区间）、`bg-global-blobs`（金属上限 = 均值 + 22 时出现面积 ≥ 5000 的巨大缺陷）、`bg-local-learn`（半径 2 时学到的金属下限 ≥ 30，不再是盲的）、`bg-local-dots`（半径 2 时缺陷数 ≥ 20、最大面积 ≤ 400、标记像素不到全局区间的 1/10）；并截取检出参数窗口截图；教学程序自测显式给出 `-link` 且另一个进程里有空闲的工作室时多一个最后的 `live` 步骤（跟随工作室，断言收到的图与其发布的描述渲染出的图逐字节相同）；共 51 个步骤，输出 `native-metrics.json` 与 19 张截图（原 13 张加 palette-light、palette-focus、defect-virtual、defect-edge-off、defect-snap、defect-snap-stale）。
 - 良品基线：加入边缘忽略后，自动学习后的 `inspect-good` 步骤在参考型号上测得 1 个缺陷 / 14 个越界像素（此前没有边缘忽略时约为 129 个缺陷 / 7119 个越界像素）。
 - 实测（16 线程、reference 25fbo015-15）：加载约 300 ms；光照渲染约 29 ms；GV 测量 15–25 ms；对齐（1/2 工作分辨率）约 150 ms；缺陷渲染 + 检出任务均值约 0.8 s、最大约 1.0 s（其中检出约 0.35 s）；UI 每帧 < 1 ms。
 

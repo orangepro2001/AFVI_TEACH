@@ -4,7 +4,13 @@ Go + Dear ImGui 原生实现的 AFVI 彩色检查机教学桌面软件。
 
 ## 项目概述
 
-本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言和 Dear ImGui 构建，取代了基于 WebView2 的方案。应用为 **teach-imgui**，包含光照、对齐、缺陷三大功能页面。
+本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言和 Dear ImGui 构建，取代了基于 WebView2 的方案。同一个模块构建两个 GUI 程序与一个命令行相机程序：
+
+- **teach-imgui.exe**（教学程序）：对齐页与缺陷检出页。缺陷检出页负责相机通道、相机抓拍来源、F1 检出参数、学习区间、结果与探查；它没有绘制工具、没有光照页，也从不画出模拟笔画轮廓（那是答案）。
+- **camera-gui.exe**（相机合成工作室，窗口标题 "Color AFVI Camera Studio"）：camera.exe 的 GUI 前端，把原始 MEDIAN 图像处理成合成抓拍。包含「光照与 GV」页与「缺陷合成」页（渲染通道、虚拟良品、笔刷、画框工具、颜色、幅度、轮廓、随机不良、传感器噪声、测试图/标准图/差异图、选择面板与浮动编辑器、可见的笔画轮廓）；它从不运行检出，右侧「输出」栏把当前场景保存成抓拍。
+- **camera.exe**（命令行）：相机模拟程序，两个 GUI 都以子进程方式调用它。
+
+两个 GUI 之间通过本机端口**实时联机**（协议见 [docs/LINK.md](docs/LINK.md)）：在工作室里画缺陷，教学程序约 0.1 秒后就在测试图里看到并检出，不需要保存任何图片；需要留存时由教学程序保存图片和检出参数（`inspect.json`），下次用「载入」读回。默认地址 `127.0.0.1:47631`，`-link` 修改，`-link off` 关闭。
 
 ## 快速开始
 
@@ -32,25 +38,33 @@ x86_64-w64-mingw32-gcc --version
 ### 构建
 
 ```bash
-# 构建 teach-imgui
+# 构建 teach-imgui、camera-gui 与 camera
 ./scripts/build-wsl.sh
 ```
 
-输出为 `bin/teach-imgui.exe` 与 `bin/camera.exe`。
+输出为 `bin/teach-imgui.exe`、`bin/camera-gui.exe` 与 `bin/camera.exe`。
 
 详细构建说明见 [docs/BUILD.md](docs/BUILD.md)。
 
 ### 运行（Windows 环境）
 
 ```powershell
-# 基本运行
+# 基本运行（教学程序）
 .\bin\teach-imgui.exe
 
-# 指定参数
-.\bin\teach-imgui.exe -ref C:\path\to\reference -theme dark -lang zh
+# 相机合成工作室
+.\bin\camera-gui.exe
+
+# 指定参数（两个 GUI 通用，-fontsize 为界面字号 10–28，默认 16）
+.\bin\teach-imgui.exe -ref C:\path\to\reference -theme dark -lang zh -fontsize 16
 
 # 指定机台配置文件
 .\bin\teach-imgui.exe -config afvi.toml -machine AFVI-01
+
+# 实时联机：先后顺序无关，各开一个窗口即可；换端口或关闭联机（两个程序要用同一个地址）
+.\bin\camera-gui.exe -link 127.0.0.1:47700
+.\bin\teach-imgui.exe -link 127.0.0.1:47700
+.\bin\teach-imgui.exe -link off
 
 # 启动时打开特定型号
 .\bin\teach-imgui.exe -model FM1/25fbo015-15
@@ -66,12 +80,21 @@ x86_64-w64-mingw32-gcc --version
 ```
 AFVI_TEACH/
 ├── go.mod, go.sum            # 模块 afvi/teach-imgui（Go 1.27）
-├── cmd/teach-imgui/main.go   # 程序入口（锁定 OS 线程，调用 app.Run）
+├── cmd/teach-imgui/main.go   # 教学程序入口（锁定 OS 线程，调用 app.Run）
+├── cmd/camera-gui/main.go    # 相机合成工作室入口（锁定 OS 线程，调用 app.RunStudio）
 ├── cmd/camera/main.go        # 相机模拟程序入口（纯 Go，无 cgo）
 ├── internal/
 │   ├── app/                  # UI 应用（package app）
-│   │   ├── run.go            # Run()：命令行参数、配置加载、字体、窗口、主循环
+│   │   ├── run.go            # Run() / RunStudio()：命令行参数、配置加载、字体、窗口、主循环
 │   │   ├── app.go            # Panel 接口、共享状态、布局（菜单栏 / 工具栏 / 页签 / 状态栏）
+│   │   ├── profile.go        # Profile（教学 / 工作室）、窗口标题、DefectPanel 的检出 / 合成模式
+│   │   ├── scale.go          # SetFontPx 与 sc()：按界面字号缩放硬编码像素长度
+│   │   ├── studio_capture.go # 工作室「输出」栏与 requestSaveCapture（调用 camera.exe 写抓拍）
+│   │   ├── live.go           # 实时联机接入：-link 地址解析、启动 / 关闭、每帧 Tick
+│   │   ├── live_studio.go    # 工作室：去抖发布场景、与 camera.exe 同源的渲染器、「实时联机」分组
+│   │   ├── live_teach.go     # 教学程序：自动重连的客户端、跟随工作室、实时取图、「实时联机」分组
+│   │   ├── teach_save.go     # 教学程序：保存 / 载入抓拍文件夹与 inspect.json
+│   │   ├── live_selftest.go  # 自测的 live 步骤（给出 -link 时）
 │   │   ├── win32.go          # Win32 立体边框原语
 │   │   ├── dlg_config.go     # 机台配置对话框
 │   │   ├── jobs.go  viewer.go  shapetool.go  models.go  pack.go  widgets.go  theme.go  i18n.go
@@ -83,16 +106,18 @@ AFVI_TEACH/
 │   │   ├── snap_source.go    # 相机抓拍来源（调用 camera.exe、读取抓拍文件）
 │   │   └── selftest.go  capture_windows.go
 │   ├── core/                 # 仿真（光照模型、渲染、不良涂抹、虚拟良品、笔画几何）与测试
-│   ├── inspect/              # 检出算法：只看测试图与设计材质图，含单元测试与隔离测试
+│   ├── inspect/              # 检出算法：只看测试图与设计材质图，含检出参数文件（paramsio.go）、单元测试与隔离测试
 │   ├── config/               # 机台配置包（afvi.toml，纯 Go）与测试
 │   ├── model/                # 模型扫描与加载（纯 Go，含 modeltest 合成参考树）
 │   ├── snap/                 # 抓拍文件格式（snap.json + 灰度 PNG，仅标准库与 core）
+│   ├── link/                 # 实时联机契约：协议、Server（工作室）、Client（教学），仅标准库与 snap
 │   └── camera/               # 相机渲染与命令行（纯 Go，无 cgo）
 ├── configs/afvi.example.toml # 机台配置示例
 ├── scripts/build-wsl.sh      # WSL2 构建脚本
 ├── scripts/build.ps1         # Windows 构建脚本
 ├── docs/BUILD.md             # 完整构建指南
 ├── docs/USAGE.md             # 使用说明
+├── docs/LINK.md              # 实时联机协议与保存格式
 ├── docs/REFERENCE_SETUP.md   # reference 目录设置说明
 ├── reference/                # 机台测试数据（需单独配置）
 │   ├── FM1/
@@ -105,12 +130,20 @@ AFVI_TEACH/
 
 ## 功能特性
 
-- **光照页面**：亮度调节、GV 测量
-- **对齐页面**：ROI 管理、图像对齐、遮挡处理
-- **缺陷页面**：缺陷标注（点/线/块/异物/污染）、缺陷检测
+- **教学程序（teach-imgui.exe）**
+  - **手动控制**：缺陷页的「手动模式」「检出（F5）」「载入图像…」，由用户决定何时检出、检出哪张图（详见 [docs/MANUAL.md](docs/MANUAL.md)）
+  - **应用图标**：两个 GUI 都有 Win32 经典风格的图标，由 `internal/appicon` 渲染、`go run ./cmd/mkicon` 生成（详见 [docs/ICON.md](docs/ICON.md)）
+  - **对齐页面**：ROI 管理、图像对齐、遮挡处理
+  - **缺陷检出页面**：相机通道、相机抓拍来源、F1 检出参数、学习区间、结果与探查；无绘制工具，也不显示模拟笔画轮廓
+- **相机合成工作室（camera-gui.exe）**
+  - **光照与 GV 页面**：亮度调节、GV 测量
+  - **缺陷合成页面**：缺陷标注（点/线/块/异物/污染）、虚拟良品、笔刷与画框工具、颜色、随机不良、传感器噪声、测试图/标准图/差异图、选择面板与浮动编辑器、可见的笔画轮廓
+  - **输出栏**：把当前场景保存成抓拍（输出文件夹、通道、良品样本、仅描述文件），交给教学程序用「相机抓拍」载入
 - **虚拟良品与默认不良**：加载型号时把确定性的表面不均匀烘焙进光照场景，所有页面都渲染"真实"良品；缺陷页自动加入约 10 个肉眼几乎不可见的默认亮点
 - **悬浮工具面板与专注模式**：视图右侧的 Photoshop 风格工具面板（点选 / 矩形框 / 椭圆框 / 多边形框 / 专注），F11 或视图菜单可隐藏两侧面板放大中央图像
 - **选择与调参**：用悬浮面板选中已画的不良，在浮动窗口中批量调整幅度、半径、柔和度、颗粒、边缘轮廓与启用状态，并显示哪些不良已被 Inspect 检出
+- **实时联机**：工作室（服务端）与教学程序（客户端）经本机端口对等通信，工作室里的每次修改约 0.1 秒后出现在教学程序的测试图里，教学程序据此检出，全程没有图片文件；教学程序可随时「保存」当前画面（三个通道的测试图与良品图）和检出参数，下次「载入」；路径默认 `captures\<型号 id>`，两个程序相同
+- **保存检出参数**：每个通道的学习区间、尺寸、最小面积、边缘忽略、局部背景等存成 `inspect.json`（与抓拍同一文件夹，也可在 F1 窗口单独保存 / 载入），载入抓拍时自动恢复
 - **相机模拟与抓拍（Snap）**：独立的 `camera.exe`（纯 Go，无 cgo）把完美的 MEDIAN 渲染成有缺陷的"实拍"图，缺陷页可勾选"使用相机抓拍图像"后 Snap（把当前场景写成描述文件、调用 `camera.exe`、读回 PNG 并检出）或 Load（读入已有抓拍并导入其笔画与噪声）；抓拍与进程内渲染逐字节一致，检出依旧只看测试图与设计材质图
 - **多语言支持**：中文、英文、韩文
 - **主题切换**：经典浅灰 / 深色主题运行时切换（视图菜单）
@@ -138,18 +171,18 @@ AFVI_TEACH/
 
 ### 页面操作
 
-**光照页**：
+**光照与 GV 页（camera-gui.exe）**：
 - 左侧滑块：调节亮度
 - 左键拖框：测量 GV
 - 悬浮工具面板：只支持矩形框（GV 测量框，始终激活）
 
-**对齐页**：
+**对齐页（teach-imgui.exe）**：
 - 左键：新建 ROI/遮挡
 - 选择移动：拖动 ROI
 - Delete：删除选中的 ROI
 - 悬浮工具面板：点选（选择/移动 ROI）与矩形框（新建 ROI / 遮挡）
 
-**缺陷页**：
+**缺陷合成页（camera-gui.exe）**：
 - 画缺陷：点/线/块/异物/污染
 - 画框工具：矩形 / 椭圆 / 钢笔（类 Photoshop 钢笔：左键依次添加顶点，右键闭合多边形，Esc 取消，Backspace 撤销上一个顶点），可选择"亮/暗"极性；幅度、边缘轮廓、柔和度沿用左侧对应设置；画出的框成为不良（矩形/椭圆/多边形）并出现在笔画列表中
 - 不良颜色：勾选"按颜色模拟"后，新画的不良带有 RGB 颜色（R、G、B 滑块 0–1 与七个预设：红、绿、蓝、白、黄、青、品红，列表中显示 RGB 后缀，视图中轮廓用该颜色显示）；渲染通道（Red/Green/Blue）下画面仍是黑白灰度，不良在某通道中的亮度变化 = 幅度 × 该通道的颜色分量（例如纯红不良只在 Red 通道可见，白色不良在三个通道都可见）；颜色设置只作用于之后新画的不良，随机批量生成也使用当前颜色
@@ -163,10 +196,18 @@ AFVI_TEACH/
 - 结果：检出数、因 MinArea 滤除的分组数、越界像素总数；逐材质统计表（材质、像素、均值、标准差、最小、最大、区间、过亮、过暗）；缺陷表（材质、极性、面积、宽×高、峰值 GV、超出量、均值 GV、碎块数，最多显示面积最大的前 500 个，点击某行视图居中）。视图上的缺陷框：橙色为过亮、蓝色为过暗，并带"材质 面积"标签
 - 探查：拖框后按材质显示像素数、均值、最小/最大、区间与过亮/过暗计数，并给出通俗解释（全部落在区间内 → 没有标记，区间过宽会漏检；有标记但分组小于 MinArea → 被丢弃；否则给出框内缺陷数）
 - 标准图 / 差异图只是仿真的显示辅助，检出本身从不接收标准图
+- 输出栏：输出文件夹（默认 exe 同级的 `captures/<型号 id>`，`/` 替换为 `-`）、通道复选框 Red/Green/Blue、「同时输出良品样本」（`red-good.png` 等，供教学程序学习区间）、「仅输出描述文件」（写出 `snap.json.gz`，几 KB）与「保存抓拍」按钮；保存时运行 `camera.exe`（在 exe 同级或由 `AFVI_CAMERA_EXE` 指定）并写出 `snap.json` 与各通道 PNG，下方显示场景摘要与最近一次保存
+- 实时联机分组（输出栏内）：监听地址、已连接的教学程序、当前修订；端口被占用时显示原因（程序照常运行）。实时联机不需要点「保存抓拍」
+
+**缺陷检出页（teach-imgui.exe）**：
+- 相机通道、相机抓拍来源（载入或 Snap 抓拍）、F1 检出参数、学习区间、结果与探查
+- 没有绘制工具，也从不画出模拟笔画轮廓（那是答案）
+- 测试图默认来自实时联机：工作室在运行时自动跟随它的场景（「实时联机」分组，复选框"跟随相机工作室"），显示来源与连接状态；型号不同时给出"切换到该型号"按钮；也可用「相机抓拍」载入或 Snap；既没有工作室也没有抓拍时使用内置默认场景（虚拟良品 + 约 10 个很小的不良）
+- 「相机抓拍」分组的路径框默认是 `captures\<型号 id>`（与工作室输出栏相同）：「载入」读入并恢复该文件夹里的 `inspect.json`，「保存」写入 `snap.json`、三个通道的测试图与良品图和 `inspect.json`；F1 窗口里还有「保存检出参数 / 载入检出参数」
 
 ## 相机模拟（camera.exe）与抓拍（Snap）
 
-`camera.exe` 是独立的相机模拟程序（源码 `cmd/camera/main.go`，逻辑在 `internal/camera`，纯 Go、`CGO_ENABLED=0`，Linux 与 Windows 都能构建运行）：它把完美的 MEDIAN 渲染成有缺陷的"实拍"图，教学应用通过"抓拍（Snap）"读取这份实拍。两侧靠文件契约与进程边界解耦，互不依赖。
+`camera.exe` 是独立的相机模拟程序（源码 `cmd/camera/main.go`，逻辑在 `internal/camera`，纯 Go、`CGO_ENABLED=0`，Linux 与 Windows 都能构建运行）：它把完美的 MEDIAN 渲染成有缺陷的"实拍"图，教学应用通过"抓拍（Snap）"读取这份实拍。`camera-gui.exe` 是它的 GUI 前端：在工作室里画好场景后按「保存抓拍」，同样由 `camera.exe` 写出抓拍文件夹。两侧靠文件契约与进程边界解耦，互不依赖。
 
 抓拍是一个文件夹：描述文件 `snap.json`（也可单独作为 `*.json` 或 gzip 压缩的 `*.json.gz` 读取；未知字段忽略；`version` 为 1）加上 8 位灰度 PNG `red.png`、`green.png`、`blue.png`（kind 为 `test`）与 `red-good.png` 等（kind 为 `good`，不含不良的良品样本，用于学习区间）。`snap.json` 携带全部元信息：`format`（`afvi-snap`）、`version`、`producer`、`created`（UTC）、`model`（id、host、model、side 以及 Metal/SR/Open/MEDIAN 各层的绝对路径）、`width`、`height`、`recipe`（`product` 虚拟良品选项、`light` 光照设置、`noise` 成像噪声、`defects` GV 不良笔画、`sceneStrokes`）与 `images`（通道、kind、文件、宽高、原始像素的 sha256，读取时校验）。用 `-mode recipe` 只写描述文件：只有几 KB（gzip 压缩后更小），任何消费者都能据此确定性地重新合成完全相同的像素。
 
@@ -193,7 +234,9 @@ bin/camera -info capture/snap.json
 
 教学侧（缺陷页左侧面板"相机抓拍"分组，紧跟渲染通道分组之后）：复选框"使用相机抓拍图像"；按钮 Snap（把当前场景——启用的笔画、虚拟良品、光照、噪声——写成描述文件，运行 `camera.exe`，读回 PNG 并检出）；文本框 + Load（读取已有抓拍文件夹或描述文件，并导入其中的笔画与噪声）；抓拍元信息表格；抓拍过期时的警告（抓拍后又编辑过：需重新 Snap，在此之前仍显示已抓拍的图像）；切换通道时按需向 `camera.exe` 索取缺失的通道；取消勾选即回到进程内仿真。标准图 / 差异图仍是本地干净渲染。`camera.exe` 的查找顺序为环境变量 `AFVI_CAMERA_EXE` → 教学程序 exe 同级 → PATH。临时抓拍文件夹在被替换、重置或退出时删除。检出依旧只接收测试图与设计材质图。
 
-解耦规则由测试守护：`internal/app` 从不导入 `internal/camera`；`internal/camera` 从不导入 `internal/inspect` 或 `internal/app`；`internal/core` 不导入 snap/model/camera/inspect 中的任何一个；`internal/snap` 只导入标准库与 `internal/core`；`internal/inspect` 保持只用标准库。`app` 包内把格式包导入为 `snapfmt`，因为该包已有一个名为 `snap` 的函数。
+实时联机（[docs/LINK.md](docs/LINK.md)）把同一份契约放在 `internal/link`：工作室发布 `snap.Meta` 描述（没有像素），教学程序按需拉取 8 位灰度帧（`test` 测试图、`good` 良品样本、`golden` 仅供标准图 / 差异图视图），帧与 `camera.exe` 用同一份描述写出的 PNG 逐字节相同；修订号过期的请求被拒绝，所以不会把旧图当新图。教学程序只取像素，不同步工作室的光照 / 虚拟良品 / 笔画；保存的抓拍文件夹与联机无关，没有工作室时照常载入。
+
+解耦规则由测试守护：`internal/app` 从不导入 `internal/camera`；`internal/camera` 从不导入 `internal/inspect` 或 `internal/app`；`internal/core` 不导入 snap/model/camera/inspect 中的任何一个；`internal/snap` 只导入标准库与 `internal/core`；`internal/inspect` 保持只用标准库；`internal/link` 只导入标准库与 `internal/snap`，且只有 `internal/app` 里的联机文件（`live*.go`、`teach_save.go`）能导入它。`app` 包内把格式包导入为 `snapfmt`，因为该包已有一个名为 `snap` 的函数。
 
 限制：只有缺陷页能使用抓拍（光照页与对齐页仍在进程内渲染）；每次抓拍进程都会重新加载 TIFF 各层；自测截图需要未锁屏的 Windows 会话。
 
@@ -230,17 +273,20 @@ ln -s /path/to/existing/reference ./reference
 ### 单元测试
 
 ```bash
-go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/...
+go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/...
 ```
 
-配置包 16 个测试 + 核心 73 个测试 + 检出 31 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试。核心的 73 个测试 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 31 个测试 = 原有 21 个 + 10 个局部背景测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性、逐材质开关）。渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致；检出算法（`internal/inspect`）是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
+配置包 16 个测试 + 核心 73 个测试 + 检出 35 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试。核心的 73 个测试 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 35 个测试 = 原有 21 个 + 10 个局部背景测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性、逐材质开关）+ 4 个检出参数文件测试（往返、按名字存材质、容错读取、拒绝坏文件）；联机的 15 个测试覆盖协议往返、过期修订、渲染中发布、各类错误、合并推送、缓存失效、多客户端、服务端关闭、取消、大帧、非联机对端、协议版本不符、成帧与导入限制。渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致；检出算法（`internal/inspect`）是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
 
 ### 自测
 
 ```bash
 # WSL2 构建后，传输到 Windows 运行
 .\bin\teach-imgui.exe -selftest -out selftest-output
+.\bin\camera-gui.exe -selftest -out selftest-output
 ```
+
+两个程序的自测步骤按程序过滤（`filterSteps`）：教学程序跑对齐与检出步骤，工作室跑光照与合成步骤，外加一个 `studio-save` 步骤（通过 `camera.exe` 写出 `<dir>\studio-capture` 并校验像素的 sha256）。两者都需要 `camera.exe` 与可执行文件放在一起，`native-metrics.json` 的 `errors` 必须为 null。
 
 自测会：
 - 遍历所有页签、主题、语言
@@ -251,6 +297,7 @@ go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./inter
 - 断言虚拟良品：`product-variation`（RMS ≥ 0.05）、`product-off`（恢复原始纹理，RMS 0）、`product-on`；`defaults-detected`（10 个默认笔画很小、≥ 9 个被检出、额外缺陷 ≤ 6）；`edge-margin-off`（> 20 个缺陷）/ `edge-margin-on`（≤ 20 个）
 - 断言相机抓拍：`snap-camera`（抓拍图与进程内渲染逐字节相同，10 个默认笔画被检出）、`snap-stale`（编辑后报告过期）、`snap-resnap`（重新抓拍后不再过期且图像改变）、`snap-channel`（按需渲染绿色通道）、`snap-load`（读入抓拍并导入笔画）、`snap-off`（临时文件夹被删除）；自测需要 `camera.exe` 与 `teach-imgui.exe` 放在一起，时限 300 s
 - 断言局部背景：bg-global-learn、bg-global-blobs（半径 0、金属上限 = 均值 + 22 时出现面积 ≥ 5000 的巨大缺陷）、bg-local-learn（学到的金属下限 ≥ 30，不再是盲的）、bg-local-dots（半径 2 时缺陷数 ≥ 20、最大面积 ≤ 400、标记像素不到全局区间的 1/10）
+- 实时联机（可选）：自测默认不联机；先让一个空闲的工作室在某个地址上运行（`.\bin\camera-gui.exe -link 127.0.0.1:47651`），再运行 `.\bin\teach-imgui.exe -selftest -link 127.0.0.1:47651 -out selftest-output`，教学程序多出最后一个 `live` 步骤：跟随另一个进程里的工作室，断言收到的图像与工作室发布的描述渲染出的图逐字节相同，且检出结果与直接检出该图一致
 - 截取检出参数窗口截图
 - 保存 19 张截图（原 13 张加 palette-light、palette-focus、defect-virtual、defect-edge-off、defect-snap、defect-snap-stale），共 51 个步骤
 - 输出性能指标（native-metrics.json）
