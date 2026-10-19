@@ -215,7 +215,7 @@ func TestBackgroundSmoothRamp(t *testing.T) {
 	base.Materials[Metal].Enabled = true
 	base.Materials[SR].Enabled = false
 	base.Materials[Metal].Size = 3
-	base.Materials[Metal].MinArea = 4
+	base.Materials[Metal].MinArea = 1
 	base.EdgeMargin = 0
 
 	// a) r = 0：学习后对测试图无缺陷（盲区）。

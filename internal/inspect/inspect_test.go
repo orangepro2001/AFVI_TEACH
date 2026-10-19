@@ -162,7 +162,7 @@ func TestTooWideRangeMisses(t *testing.T) {
 	}
 }
 
-func TestSizeMergesSplits(t *testing.T) {
+func TestSizeIsContiguousPixelCount(t *testing.T) {
 	w, h := 64, 48
 	// 五个 2x2 亮块，间距 4（块间空隙 2）。
 	patches := [][2]int{{5, 5}, {11, 5}, {17, 5}, {23, 5}, {29, 5}}
@@ -188,65 +188,68 @@ func TestSizeMergesSplits(t *testing.T) {
 		t.Fatalf("Size=1 期望 5 个缺陷，得到 %d", len(rep.Defects))
 	}
 	for _, d := range rep.Defects {
-		if d.Fragments != 1 {
-			t.Fatalf("期望 Fragments=1，得到 %d", d.Fragments)
+		if d.Area != 4 {
+			t.Fatalf("Size=1 期望每个缺陷 Area=4，得到 %d", d.Area)
 		}
 	}
 
+	// Size=4：块之间相隔 2 像素，不连通，因此仍是 5 个缺陷，各 Area=4。
+	p.Materials[Metal].Size = 4
+	rep, err = Inspect(img, reg, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Defects) != 5 {
+		t.Fatalf("Size=4 期望 5 个缺陷（不合并），得到 %d", len(rep.Defects))
+	}
+	for _, d := range rep.Defects {
+		if d.Area != 4 {
+			t.Fatalf("Size=4 期望每个缺陷 Area=4，得到 %d", d.Area)
+		}
+	}
+
+	// Size=5：每个连通块只有 4 个被标记像素，全部被过滤。
 	p.Materials[Metal].Size = 5
 	rep, err = Inspect(img, reg, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rep.Defects) != 1 {
-		t.Fatalf("Size=5 期望 1 个缺陷，得到 %d", len(rep.Defects))
+	if len(rep.Defects) != 0 {
+		t.Fatalf("Size=5 期望 0 个缺陷，得到 %d", len(rep.Defects))
 	}
-	d := rep.Defects[0]
-	if d.Fragments != 5 {
-		t.Fatalf("期望 Fragments=5，得到 %d", d.Fragments)
+	if rep.Filtered != 5 {
+		t.Fatalf("Size=5 期望 Filtered=5，得到 %d", rep.Filtered)
 	}
-	if d.Area != 20 {
-		t.Fatalf("期望 Area=20，得到 %d", d.Area)
-	}
-	if d.BBox.X != 5 || d.BBox.W != 26 {
-		t.Fatalf("期望 BBox.X=5 W=26，得到 X=%d W=%d", d.BBox.X, d.BBox.W)
+	if rep.FlaggedPixels != 20 {
+		t.Fatalf("Size=5 期望 FlaggedPixels=20，得到 %d", rep.FlaggedPixels)
 	}
 
-	// 间距 10 时仍为 5 个。
-	patches2 := [][2]int{{5, 5}, {17, 5}, {29, 5}, {41, 5}, {53, 5}}
-	img2, reg2 := buildImage(w, h, func(x, y int) (uint8, Material) {
-		for _, p := range patches2 {
-			if x >= p[0] && x < p[0]+2 && y >= p[1] && y < p[1]+2 {
-				return 200, Metal
-			}
-		}
-		return 100, Metal
-	})
-	rep, err = Inspect(img2, reg2, p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rep.Defects) != 5 {
-		t.Fatalf("间距 10 期望 5 个缺陷，得到 %d", len(rep.Defects))
-	}
-
-	// 对角相邻：Size=1 时仍为一个缺陷。
+	// 对角相邻：(5,5) 与 (6,6) 8 连通。
 	img3, reg3 := buildImage(w, h, func(x, y int) (uint8, Material) {
 		if (x == 5 && y == 5) || (x == 6 && y == 6) {
 			return 200, Metal
 		}
 		return 100, Metal
 	})
-	p.Materials[Metal].Size = 1
+	p.Materials[Metal].Size = 2
 	rep, err = Inspect(img3, reg3, p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(rep.Defects) != 1 {
-		t.Fatalf("对角相邻期望 1 个缺陷，得到 %d", len(rep.Defects))
+		t.Fatalf("对角相邻 Size=2 期望 1 个缺陷，得到 %d", len(rep.Defects))
 	}
-	if rep.Defects[0].Fragments != 1 {
-		t.Fatalf("期望 Fragments=1，得到 %d", rep.Defects[0].Fragments)
+	if rep.Defects[0].Area != 2 {
+		t.Fatalf("对角相邻 Size=2 期望 Area=2，得到 %d", rep.Defects[0].Area)
+	}
+
+	p.Materials[Metal].Size = 3
+	rep, err = Inspect(img3, reg3, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Defects) != 0 {
+		t.Fatalf("对角相邻 Size=3 期望 0 个缺陷，得到 %d", len(rep.Defects))
 	}
 }
 
@@ -296,6 +299,40 @@ func TestMinArea(t *testing.T) {
 	if rep.Filtered != 0 {
 		t.Fatalf("期望 Filtered=0，得到 %d", rep.Filtered)
 	}
+
+	// Size=2、MinArea=4：阈值 max(2,4)=4，面积 1、3 被过滤，只有面积 8 被报告。
+	p.Materials[Metal].Size = 2
+	p.Materials[Metal].MinArea = 4
+	rep, err = Inspect(img, reg, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Defects) != 1 {
+		t.Fatalf("Size=2 MinArea=4 期望 1 个缺陷，得到 %d", len(rep.Defects))
+	}
+	if rep.Defects[0].Area != 8 {
+		t.Fatalf("Size=2 MinArea=4 期望 Area=8，得到 %d", rep.Defects[0].Area)
+	}
+	if rep.Filtered != 2 {
+		t.Fatalf("Size=2 MinArea=4 期望 Filtered=2，得到 %d", rep.Filtered)
+	}
+
+	// Size=5、MinArea=2：阈值 max(5,2)=5，只有面积 8 被报告。
+	p.Materials[Metal].Size = 5
+	p.Materials[Metal].MinArea = 2
+	rep, err = Inspect(img, reg, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Defects) != 1 {
+		t.Fatalf("Size=5 MinArea=2 期望 1 个缺陷，得到 %d", len(rep.Defects))
+	}
+	if rep.Defects[0].Area != 8 {
+		t.Fatalf("Size=5 MinArea=2 期望 Area=8，得到 %d", rep.Defects[0].Area)
+	}
+	if rep.Filtered != 2 {
+		t.Fatalf("Size=5 MinArea=2 期望 Filtered=2，得到 %d", rep.Filtered)
+	}
 }
 
 func TestPolarityAndMaterialSeparation(t *testing.T) {
@@ -318,15 +355,15 @@ func TestPolarityAndMaterialSeparation(t *testing.T) {
 	p.Materials[Metal].High = 110
 	p.Materials[SR].Low = 90
 	p.Materials[SR].High = 110
-	p.Materials[Metal].Size = 9
-	p.Materials[SR].Size = 9
+	p.Materials[Metal].Size = 1
+	p.Materials[SR].Size = 1
 	p.Materials[Metal].MinArea = 1
 	p.Materials[SR].MinArea = 1
 	rep, err := Inspect(img, reg, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 亮 Metal、暗 Metal、亮 SR 各一个。
+	// 亮 Metal、暗 Metal、亮 SR 各一个（相邻也不合并）。
 	if len(rep.Defects) != 3 {
 		t.Fatalf("期望 3 个缺陷，得到 %d: %+v", len(rep.Defects), rep.Defects)
 	}
@@ -561,7 +598,7 @@ func TestBruteForceCrossCheck(t *testing.T) {
 			}
 		}
 		size := 1 + rng.Intn(9)
-		minArea := 1 + rng.Intn(3)
+		minArea := 1 + rng.Intn(9)
 		p := DefaultParams()
 		p.Materials[Metal].Low = 60
 		p.Materials[Metal].High = 150
@@ -583,7 +620,8 @@ func TestBruteForceCrossCheck(t *testing.T) {
 	}
 }
 
-// naiveInspect 是朴素参考实现。
+// naiveInspect 是朴素参考实现：不膨胀，直接对原始标记掩码做 8 连通洪泛，
+// 阈值 need = max(Size, MinArea)。
 func naiveInspect(img Image, reg Regions, p Params) []Defect {
 	w, h := img.Width, img.Height
 	var out []Defect
@@ -593,6 +631,10 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 			continue
 		}
 		m := Material(mi)
+		need := mp.Size
+		if mp.MinArea > need {
+			need = mp.MinArea
+		}
 		for _, pol := range []Polarity{Bright, Dark} {
 			mask := make([]uint8, w*h)
 			for i := range mask {
@@ -606,35 +648,16 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 					mask[i] = 1
 				}
 			}
-			r := mp.Size / 2
-			grown := make([]uint8, w*h)
-			for y := 0; y < h; y++ {
-				for x := 0; x < w; x++ {
-					if mask[y*w+x] == 0 {
-						continue
-					}
-					for dy := -r; dy <= r; dy++ {
-						for dx := -r; dx <= r; dx++ {
-							ny, nx := y+dy, x+dx
-							if ny < 0 || ny >= h || nx < 0 || nx >= w {
-								continue
-							}
-							grown[ny*w+nx] = 1
-						}
-					}
-				}
-			}
-			// 朴素 8 连通洪泛。
+			// 原始掩码的 8 连通分量标记。
 			label := make([]int, w*h)
 			for i := range label {
 				label[i] = -1
 			}
 			comp := 0
-			for i := range grown {
-				if grown[i] == 0 || label[i] >= 0 {
+			for i := range mask {
+				if mask[i] == 0 || label[i] >= 0 {
 					continue
 				}
-				// BFS
 				queue := []int{i}
 				label[i] = comp
 				for len(queue) > 0 {
@@ -651,7 +674,7 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 								continue
 							}
 							ni := ny*w + nx
-							if grown[ni] != 0 && label[ni] < 0 {
+							if mask[ni] != 0 && label[ni] < 0 {
 								label[ni] = comp
 								queue = append(queue, ni)
 							}
@@ -660,46 +683,10 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 				}
 				comp++
 			}
-			// 原始掩码的 8 连通分量标记，用于统计 Fragments。
-			oLabel := make([]int, w*h)
-			for i := range oLabel {
-				oLabel[i] = -1
-			}
-			oComp := 0
-			for i := range mask {
-				if mask[i] == 0 || oLabel[i] >= 0 {
-					continue
-				}
-				queue := []int{i}
-				oLabel[i] = oComp
-				for len(queue) > 0 {
-					cur := queue[0]
-					queue = queue[1:]
-					cy, cx := cur/w, cur%w
-					for dy := -1; dy <= 1; dy++ {
-						for dx := -1; dx <= 1; dx++ {
-							if dy == 0 && dx == 0 {
-								continue
-							}
-							ny, nx := cy+dy, cx+dx
-							if ny < 0 || ny >= h || nx < 0 || nx >= w {
-								continue
-							}
-							ni := ny*w + nx
-							if mask[ni] != 0 && oLabel[ni] < 0 {
-								oLabel[ni] = oComp
-								queue = append(queue, ni)
-							}
-						}
-					}
-				}
-				oComp++
-			}
-			// 按分量聚合原始被标记像素。
+			// 按分量聚合被标记像素。
 			type acc struct {
 				area                   int
 				minX, minY, maxX, maxY int
-				fragments              int
 			}
 			accs := make([]acc, comp)
 			for i := range accs {
@@ -708,7 +695,6 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 				accs[i].maxX = -1
 				accs[i].maxY = -1
 			}
-			seenFrag := make([]bool, oComp)
 			for i := range mask {
 				if mask[i] == 0 {
 					continue
@@ -732,22 +718,16 @@ func naiveInspect(img Image, reg Regions, p Params) []Defect {
 				if y > a.maxY {
 					a.maxY = y
 				}
-				oc := oLabel[i]
-				if oc >= 0 && !seenFrag[oc] {
-					seenFrag[oc] = true
-					a.fragments++
-				}
 			}
 			for _, a := range accs {
-				if a.area == 0 || a.area < mp.MinArea {
+				if a.area == 0 || a.area < need {
 					continue
 				}
 				out = append(out, Defect{
-					Material:  m,
-					Polarity:  pol,
-					Area:      a.area,
-					BBox:      Rect{X: a.minX, Y: a.minY, W: a.maxX - a.minX + 1, H: a.maxY - a.minY + 1},
-					Fragments: a.fragments,
+					Material: m,
+					Polarity: pol,
+					Area:     a.area,
+					BBox:     Rect{X: a.minX, Y: a.minY, W: a.maxX - a.minX + 1, H: a.maxY - a.minY + 1},
 				})
 			}
 		}
@@ -765,14 +745,13 @@ func sameDefectMultiset(a, b []Defect) bool {
 		p    Polarity
 		area int
 		bb   Rect
-		frag int
 	}
 	counts := map[key]int{}
 	for _, d := range a {
-		counts[key{d.Material, d.Polarity, d.Area, d.BBox, d.Fragments}]++
+		counts[key{d.Material, d.Polarity, d.Area, d.BBox}]++
 	}
 	for _, d := range b {
-		k := key{d.Material, d.Polarity, d.Area, d.BBox, d.Fragments}
+		k := key{d.Material, d.Polarity, d.Area, d.BBox}
 		counts[k]--
 		if counts[k] < 0 {
 			return false

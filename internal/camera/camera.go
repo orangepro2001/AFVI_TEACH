@@ -110,7 +110,8 @@ func Render(scene *model.Scene, recipe snap.Recipe, opt Options) (*Result, error
 			return nil, fmt.Errorf("camera: unknown channel %d", ch)
 		}
 		light := cr.Light
-		golden, test := core.RenderDefectPair(ls, &light, ch, cr.Scene, cr.Defects, cr.Noise)
+		// The product sits where the recipe's warp says (misalignment, lift); the defects move with it.
+		golden, test := core.RenderDefectPairWarped(ls, &light, ch, cr.Scene, cr.Defects, cr.Noise, cr.Warp)
 		_ = golden
 		testFrame := snap.Frame{Width: test.Width, Height: test.Height, Pix: test.Data}
 		key := ImageKey{Channel: name, Kind: snap.KindTest}
@@ -124,6 +125,7 @@ func Render(scene *model.Scene, recipe snap.Recipe, opt Options) (*Result, error
 			SHA256:  snap.PixelHash(testFrame),
 		})
 		if opt.Good {
+			// The good sample is the taught reference: it always sits at the nominal position.
 			good := core.RenderGoodSample(ls, &light, ch, core.GoodSampleNoise(cr.Noise))
 			goodFrame := snap.Frame{Width: good.Width, Height: good.Height, Pix: good.Data}
 			goodKey := ImageKey{Channel: name, Kind: snap.KindGood}

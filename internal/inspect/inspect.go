@@ -66,8 +66,8 @@ type Rect struct {
 type MaterialParams struct {
 	Enabled   bool    // 关闭的材质像素永不被标记
 	Low, High float64 // 可接受的 GV 区间，闭区间；0 <= Low <= High <= 255
-	Size      int     // 分组尺寸（像素，>= 1）：每个被标记像素在连通分量形成前按 Size/2（整除）膨胀
-	MinArea   int     // 分组被报告所需的最小被标记像素数（>= 1）
+	Size      int     // 连续（8 连通）被标记像素数下限：一个连通块至少有 Size 个被标记像素才算缺陷；不膨胀、不合并、不取平均
+	MinArea   int     // 连通块被标记像素数的额外下限，实际阈值为 max(Size, MinArea)；默认 1，即只由 Size 决定
 	// LocalBackground 为 true 时该材质按局部背景判断，仅当 Params.BackgroundRadius > 0 时生效；
 	// DefaultParams 为 true。
 	LocalBackground bool
@@ -99,13 +99,12 @@ const (
 type Defect struct {
 	Material             Material
 	Polarity             Polarity
-	Area                 int // 分组中被标记的像素数（不是膨胀后的面积）
+	Area                 int // 连通块中被标记的像素数
 	BBox                 Rect
 	CentroidX, CentroidY float64
 	PeakGV               uint8   // 区间外最远的被标记像素的 GV
 	Excess               float64 // 该像素超出区间的距离（亮：v-High，暗：Low-v）
-	MeanGV               float64 // 被标记像素的平均 GV
-	Fragments            int     // 合并进该缺陷的 8 连通碎块数（>= 1）
+	MeanGV               float64 // 被标记像素的平均 GV（仅用于显示）
 }
 
 // MaterialStats 是单个材质的统计信息。
@@ -120,15 +119,15 @@ type MaterialStats struct {
 
 // Report 是检查结果。
 type Report struct {
-	Defects       []Defect // 被报告的分组（Area >= MinArea），按 Area 降序，同面积按 BBox.Y 再按 BBox.X
-	Filtered      int      // 因 Area < MinArea 被丢弃的分组数
+	Defects       []Defect // 被报告的连通块（Area >= max(Size, MinArea)），按 Area 降序，同面积按 BBox.Y 再按 BBox.X
+	Filtered      int      // 因 Area < max(Size, MinArea) 被丢弃的连通块数
 	FlaggedPixels int      // 所有启用材质的被标记像素总数
 	EdgeIgnored   int      // 因 EdgeMargin 被忽略的像素数（所有材质合计）
 	PerMaterial   [NumMaterials]MaterialStats
 }
 
 // DefaultParams 返回默认参数：Metal 与 SR 启用，Open 与 Base 关闭；
-// 每个材质 Low=0、High=255、Size=3、MinArea=4。
+// 每个材质 Low=0、High=255、Size=3、MinArea=1。
 func DefaultParams() Params {
 	var p Params
 	for i := 0; i < NumMaterials; i++ {
@@ -137,7 +136,7 @@ func DefaultParams() Params {
 			Low:             0,
 			High:            255,
 			Size:            3,
-			MinArea:         4,
+			MinArea:         1,
 			LocalBackground: true,
 		}
 	}
@@ -318,19 +317,20 @@ func Inspect(img Image, reg Regions, p Params) (Report, error) {
 	return rep, nil
 }
 
-// analyzeMask 对一个材质、一种极性的标记掩码做膨胀、连通分组与统计。
+// analyzeMask 对一个材质、一种极性的标记掩码做 8 连通分组与统计。
+// 不膨胀、不合并：每个连通块独立判断，阈值 need = max(Size, MinArea)。
 func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialParams, lb *localBackground) (defects []Defect, filtered int) {
 	w, h := img.Width, img.Height
 
-	grown := grow(mask, w, h, mp.Size/2)
-	gRuns, gRowStart := extractRuns(grown, w, h)
-	gID, gCount := labelRuns(gRuns, gRowStart)
+	need := mp.Size
+	if mp.MinArea > need {
+		need = mp.MinArea
+	}
 
-	oRuns, oRowStart := extractRuns(mask, w, h)
-	oID, oCount := labelRuns(oRuns, oRowStart)
-	counted := make([]bool, oCount)
+	runs, rowStart := extractRuns(mask, w, h)
+	id, count := labelRuns(runs, rowStart)
 
-	// 每个分组（膨胀分量）的累加器。
+	// 每个连通块的累加器。
 	type groupAcc struct {
 		area                   int
 		minX, minY, maxX, maxY int
@@ -338,9 +338,8 @@ func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialP
 		peakGV                 uint8
 		peakExcess             float64
 		hasPeak                bool
-		fragments              int
 	}
-	groups := make([]groupAcc, gCount)
+	groups := make([]groupAcc, count)
 	for i := range groups {
 		groups[i].minX = math.MaxInt32
 		groups[i].minY = math.MaxInt32
@@ -348,30 +347,14 @@ func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialP
 		groups[i].maxY = -1
 	}
 
-	// 单趟遍历原始行程，按行推进指针，累加到所属分组。
+	// 单趟遍历行程，累加到所属连通块。
 	for y := 0; y < h; y++ {
 		rowBase := y * w
-		o0, o1 := int(oRowStart[y]), int(oRowStart[y+1])
-		if o0 >= o1 {
-			continue
-		}
-		gi := int(gRowStart[y])
-		gEnd := int(gRowStart[y+1])
-		for oi := o0; oi < o1; oi++ {
-			or := oRuns[oi]
-			for gi < gEnd && gRuns[gi].x1 < or.x0 {
-				gi++
-			}
-			if gi >= gEnd {
-				break
-			}
-			gid := int(gID[gi])
-			if !counted[oID[oi]] {
-				counted[oID[oi]] = true
-				groups[gid].fragments++
-			}
-			ga := &groups[gid]
-			for x := int(or.x0); x <= int(or.x1); x++ {
+		r0, r1 := int(rowStart[y]), int(rowStart[y+1])
+		for ri := r0; ri < r1; ri++ {
+			r := runs[ri]
+			ga := &groups[id[ri]]
+			for x := int(r.x0); x <= int(r.x1); x++ {
 				v := float64(img.Pix[rowBase+x])
 				fv := v
 				if lb != nil {
@@ -414,7 +397,7 @@ func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialP
 		if ga.area == 0 {
 			continue
 		}
-		if ga.area < mp.MinArea {
+		if ga.area < need {
 			filtered++
 			continue
 		}
@@ -428,7 +411,6 @@ func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialP
 			PeakGV:    ga.peakGV,
 			Excess:    ga.peakExcess,
 			MeanGV:    ga.sumGV / float64(ga.area),
-			Fragments: ga.fragments,
 		})
 	}
 	return defects, filtered

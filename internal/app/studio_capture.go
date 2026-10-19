@@ -106,12 +106,17 @@ func (p *DefectPanel) drawOutputPanel() {
 			}
 			lightParts = append(lightParts, name+" "+F(ch.Value, 0))
 		}
+		warp := T("studio.sum.warpNone")
+		if w := p.captureWarp(); w != nil {
+			warp = warpSummary(w)
+		}
 		rows := [][2]string{
 			{T("studio.sum.model"), scene.Info.ID},
 			{T("studio.sum.size"), fmt.Sprintf("%dx%d", scene.W, scene.H)},
 			{T("studio.sum.product"), product},
 			{T("studio.sum.light"), strings.Join(lightParts, " / ")},
 			{T("studio.sum.noise"), T("studio.sum.noiseValue", "read", F(p.noise.ReadSigma, 1), "shot", F(p.noise.ShotGain, 2), "seed", fmt.Sprint(p.noise.Seed))},
+			{T("studio.sum.warp"), warp},
 			{T("studio.sum.defects"), fmt.Sprint(len(p.gvStrokes())) + " / " + fmt.Sprint(len(p.strokes))},
 		}
 		KVTable("studio-kv", rows)
@@ -130,6 +135,9 @@ func (p *DefectPanel) drawOutputPanel() {
 			{T("defect.snap.created"), m.Created},
 			{T("defect.snap.images"), strings.Join(names, ", ")},
 			{T("defect.snap.defects"), fmt.Sprint(len(m.Recipe.Defects))},
+		}
+		if m.Recipe.Warp != nil {
+			rows = append(rows, [2]string{T("defect.snap.warp"), warpSummary(m.Recipe.Warp)})
 		}
 		KVTable("studio-last", rows)
 	}

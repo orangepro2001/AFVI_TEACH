@@ -49,7 +49,7 @@ func liveSelftestStep(s *Selftest) selftestStep {
 			meta := dp.snapSrc.meta
 			cr := meta.Recipe.Core()
 			light := cr.Light
-			_, want := core.RenderDefectPair(s.a.Scene.Light, &light, dp.channel, cr.Scene, cr.Defects, cr.Noise)
+			_, want := core.RenderDefectPairWarped(s.a.Scene.Light, &light, dp.channel, cr.Scene, cr.Defects, cr.Noise, cr.Warp)
 			if !bytes.Equal(dp.test.Data, want.Data) {
 				return nil, fmt.Errorf("live: the image received from the studio differs from the render of its published description")
 			}

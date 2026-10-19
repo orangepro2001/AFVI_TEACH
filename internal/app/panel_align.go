@@ -16,7 +16,7 @@ func init() {
 			a:         a,
 			scale:     2,
 			source:    "median",
-			viewKind:  "template",
+			viewKind:  "overlay",
 			tool:      "none",
 			selected:  -1,
 			autoRun:   true,
@@ -301,7 +301,7 @@ type AlignPanel struct {
 	occs      []core.Occlusion
 	selected  int
 	tool      string // "none" | "roi" | "select" | "occlusion"
-	viewKind  string // "template" | "input" | "diff"
+	viewKind  string // "overlay" | "template" | "input" | "diff"
 	source    string // "median" | "light"
 	scale     int
 	params    core.WarpParams
@@ -320,6 +320,9 @@ type AlignPanel struct {
 	elapsedMs    float64
 	heat         *core.NccSurface
 	reportConfig core.AlignConfig
+	reportParams core.WarpParams // warp (working resolution) and template size the report was computed for
+	reportW      int
+	reportH      int
 
 	dragging  bool
 	dragStart core.Point
@@ -495,15 +498,7 @@ func (p *AlignPanel) requestRun(force bool) {
 			t := core.CompareToTruth(r.Fit, &params, rois, template.Width, template.Height)
 			truth = &t
 		}
-		var pix []byte
-		switch viewKind {
-		case "input":
-			pix = PackGray(input)
-		case "diff":
-			pix = PackAbsDiff(template, input)
-		default:
-			pix = PackGray(template)
-		}
+		pix := packAlignView(viewKind, template, input)
 		elapsed := float64(time.Since(start).Microseconds()) / 1000
 		w, h := template.Width, template.Height
 		return func() {
@@ -520,6 +515,8 @@ func (p *AlignPanel) requestRun(force bool) {
 				p.elapsedMs = elapsed
 				p.lastScale = scale
 				p.reportConfig = config
+				p.reportParams = params
+				p.reportW, p.reportH = w, h
 				if p.selected < 0 && len(report.Matches) > 0 {
 					p.selected = 0
 					p.heat = report.Matches[0].Surface
@@ -550,15 +547,7 @@ func (p *AlignPanel) requestView() {
 	template := p.template
 	input := p.input
 	a.Jobs.Run("align-view", func() func() {
-		var pix []byte
-		switch viewKind {
-		case "input":
-			pix = PackGray(input)
-		case "diff":
-			pix = PackAbsDiff(template, input)
-		default:
-			pix = PackGray(template)
-		}
+		pix := packAlignView(viewKind, template, input)
 		w, h := template.Width, template.Height
 		return func() {
 			if a.Scene != scene || p.template != template {
@@ -615,26 +604,44 @@ func (p *AlignPanel) DrawLeft() {
 		}
 	}
 
-	if Section(T("align.section.warp"), "align-warp") {
+	if Section(T("align.section.misalign"), "align-misalign") {
+		for i, pr := range warpPresets() {
+			label := T("warp.preset." + pr.id)
+			if i > 0 {
+				WrapSameLine(label)
+			}
+			if Button(label, "align-preset-"+pr.id) {
+				setWarpGeometry(&p.params, pr.warp)
+				changed = true
+			}
+		}
 		changed = SliderF64(T("align.param.tx"), "align-tx", &p.params.Tx, -300, 300, "%.0f") || changed
 		changed = SliderF64(T("align.param.ty"), "align-ty", &p.params.Ty, -300, 300, "%.0f") || changed
 		changed = SliderF64(T("align.param.theta"), "align-theta", &p.params.ThetaDeg, -5, 5, "%.2f") || changed
 		changed = SliderF64(T("align.param.scale"), "align-scale-p", &p.params.Scale, 0.95, 1.05, "%.3f") || changed
-		changed = SliderF64(T("align.param.shearX"), "align-shearx", &p.params.ShearX, -0.05, 0.05, "%.3f") || changed
-		changed = SliderF64(T("align.param.shearY"), "align-sheary", &p.params.ShearY, -0.05, 0.05, "%.3f") || changed
-		changed = SliderF64(T("align.param.bendAmplitude"), "align-benda", &p.params.BendAmplitude, 0, 30, "%.1f") || changed
-		changed = SliderF64(T("align.param.bendWavelength"), "align-bendw", &p.params.BendWavelength, 200, 6000, "%.0f") || changed
-		changed = SliderF64(T("align.param.blurSigma"), "align-blur", &p.params.BlurSigma, 0, 6, "%.1f") || changed
-		changed = SliderF64(T("align.param.noiseSigma"), "align-noise", &p.params.NoiseSigma, 0, 40, "%.1f") || changed
-		changed = SliderF64(T("align.param.gain"), "align-gain", &p.params.Gain, 0.3, 2, "%.2f") || changed
-		changed = SliderF64(T("align.param.offset"), "align-offset", &p.params.Offset, -80, 80, "%.0f") || changed
-		changed = SliderF64(T("align.param.gradient"), "align-grad", &p.params.Gradient, -0.8, 0.8, "%.2f") || changed
 		if Button(T("align.resetAll"), "align-reset") {
 			p.params = defaultWarpParams()
 			p.occs = nil
 			p.dirty = true
 			changed = true
 		}
+	}
+
+	if Section(T("align.section.lift"), "align-lift") {
+		changed = SliderF64(T("align.param.tiltX"), "align-tiltx", &p.params.TiltX, -0.1, 0.1, "%.4f") || changed
+		changed = SliderF64(T("align.param.tiltY"), "align-tilty", &p.params.TiltY, -0.1, 0.1, "%.4f") || changed
+		changed = SliderF64(T("align.param.bendAmplitude"), "align-benda", &p.params.BendAmplitude, -30, 30, "%.1f") || changed
+		changed = SliderF64(T("align.param.bendWavelength"), "align-bendw", &p.params.BendWavelength, 200, 6000, "%.0f") || changed
+		changed = SliderF64(T("align.param.shearX"), "align-shearx", &p.params.ShearX, -0.05, 0.05, "%.3f") || changed
+		changed = SliderF64(T("align.param.shearY"), "align-sheary", &p.params.ShearY, -0.05, 0.05, "%.3f") || changed
+	}
+
+	if SectionClosed(T("align.section.photo"), "align-photo") {
+		changed = SliderF64(T("align.param.blurSigma"), "align-blur", &p.params.BlurSigma, 0, 6, "%.1f") || changed
+		changed = SliderF64(T("align.param.noiseSigma"), "align-noise", &p.params.NoiseSigma, 0, 40, "%.1f") || changed
+		changed = SliderF64(T("align.param.gain"), "align-gain", &p.params.Gain, 0.3, 2, "%.2f") || changed
+		changed = SliderF64(T("align.param.offset"), "align-offset", &p.params.Offset, -80, 80, "%.0f") || changed
+		changed = SliderF64(T("align.param.gradient"), "align-grad", &p.params.Gradient, -0.8, 0.8, "%.2f") || changed
 	}
 
 	if Section(T("align.section.occlusion"), "align-occ") {
@@ -762,24 +769,11 @@ func (p *AlignPanel) DrawLeft() {
 			p.dirty = true
 			p.requestRun(true)
 		}
-		vk := 0
-		switch p.viewKind {
-		case "input":
-			vk = 1
-		case "diff":
-			vk = 2
-		}
+		vk := alignViewIndex(p.viewKind)
 		if Combo(T("align.view"), "align-viewkind", &vk, []string{
-			T("align.view.template"), T("align.view.input"), T("align.view.diff"),
+			T("align.view.overlay"), T("align.view.template"), T("align.view.input"), T("align.view.diff"),
 		}) {
-			switch vk {
-			case 1:
-				p.viewKind = "input"
-			case 2:
-				p.viewKind = "diff"
-			default:
-				p.viewKind = "template"
-			}
+			p.viewKind = alignViews[vk]
 			if p.dirty || p.template == nil {
 				p.requestRun(true)
 			} else {
@@ -797,75 +791,11 @@ func (p *AlignPanel) DrawLeft() {
 }
 
 func (p *AlignPanel) DrawRight() {
-	a := p.a
 	if Section(T("align.section.verdict"), "align-verdict") {
-		if p.report == nil {
-			Note(T("align.result.empty"))
-		} else {
-			r := p.report
-			Badge(r.Level)
-			if len(r.Reasons) > 0 {
-				for _, reason := range r.Reasons {
-					Warn(p.reasonText(reason))
-				}
-			}
-			rows := [][2]string{}
-			if r.Fit != nil {
-				rows = append(rows, [2]string{"tx", F(r.Fit.Tx*float64(p.lastScale), 2)})
-				rows = append(rows, [2]string{"ty", F(r.Fit.Ty*float64(p.lastScale), 2)})
-				rows = append(rows, [2]string{"θ", F(r.Fit.ThetaDeg, 3)})
-				rows = append(rows, [2]string{"scale", F(r.Fit.Scale, 5)})
-			} else {
-				rows = append(rows, [2]string{T("align.result.fit"), T("align.result.fitFailed")})
-			}
-			if p.truth != nil {
-				rows = append(rows, [2]string{T("align.result.truthMean"), F(p.truth.MeanErrorPx*float64(p.lastScale), 3) + " px"})
-				rows = append(rows, [2]string{T("align.result.truthMax"), F(p.truth.MaxErrorPx*float64(p.lastScale), 3) + " px"})
-			}
-			rows = append(rows, [2]string{T("align.result.residualRms"), F(r.ResidualRms*float64(p.lastScale), 3) + " px"})
-			rows = append(rows, [2]string{T("align.result.meanNcc"), F(r.MeanNcc, 4)})
-			rows = append(rows, [2]string{T("align.result.elapsed"), F(p.elapsedMs, 1) + " ms"})
-			KVTable("align-kv", rows)
-
-			headers := []string{
-				T("align.col.roi"), T("align.col.ncc"), T("align.col.uniqueness"),
-				T("align.col.located"), T("align.col.residual"), T("align.col.reason"),
-			}
-			matches := r.Matches
-			residuals := r.Residuals
-			clicked := DataTable("align-matches", headers, len(matches), 8*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
-				m := matches[row]
-				switch col {
-				case 0:
-					return m.Name
-				case 1:
-					return F(m.Ncc, 4)
-				case 2:
-					return F(m.Uniqueness, 4)
-				case 3:
-					if m.Located {
-						return T("align.yes")
-					}
-					return T("align.no")
-				case 4:
-					if row < len(residuals) && residuals[row] >= 0 {
-						return F(residuals[row]*float64(p.lastScale), 3)
-					}
-					return "—"
-				}
-				return p.matchReasonText(m.Reason)
-			}, p.selected)
-			if clicked >= 0 && clicked < len(matches) {
-				p.selected = clicked
-				m := matches[clicked]
-				p.heat = m.Surface
-				if m.Found != nil {
-					a.Viewer.CenterOn(m.Found.X, m.Found.Y)
-				} else {
-					a.Viewer.CenterOn(m.Expected.X, m.Expected.Y)
-				}
-			}
-		}
+		p.drawVerdict()
+	}
+	if Section(T("align.section.roiResult"), "align-roires") {
+		p.drawRoiResults()
 	}
 	if Section(T("align.section.ncc"), "align-ncc") {
 		if p.heat == nil {
@@ -897,16 +827,16 @@ func (p *AlignPanel) reasonText(r core.AlignVerdictReason) string {
 		return T("align.reason.no-fit")
 	case "residual-high":
 		return T("align.reason.residual-high",
-			"rms", F(p.report.ResidualRms*float64(p.lastScale), 3),
-			"th", F(p.reportConfig.NgResidualPx, 3))
+			"rms", F(p.fullPx(p.report.ResidualRms), 3),
+			"th", F(p.fullPx(p.reportConfig.NgResidualPx), 3))
 	case "outlier":
 		return T("align.reason.outlier")
 	case "ambiguous":
 		return T("align.reason.ambiguous")
 	case "residual-warn":
 		return T("align.reason.residual-warn",
-			"rms", F(p.report.ResidualRms*float64(p.lastScale), 3),
-			"th", F(p.reportConfig.OkResidualPx, 3))
+			"rms", F(p.fullPx(p.report.ResidualRms), 3),
+			"th", F(p.fullPx(p.reportConfig.OkResidualPx), 3))
 	case "roi-missing":
 		return T("align.reason.roi-missing")
 	}
@@ -937,29 +867,13 @@ func (p *AlignPanel) Overlay(o *Overlay) {
 			o.Rect(r.X/s, r.Y/s, r.W/s, r.H/s, OverlayWarn, th)
 			o.Text(r.X/s, r.Y/s, 2, 12, OverlayWarn, r.Name)
 		}
-		for _, occ := range p.occs {
-			o.FillRect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNGFill)
-			o.Rect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNG, 1.5)
-		}
-	} else if p.report != nil {
-		for i, m := range p.report.Matches {
-			halfW := 20.0
-			halfH := 20.0
-			if i < len(p.rois) {
-				halfW = p.rois[i].W / s / 2
-				halfH = p.rois[i].H / s / 2
-			}
-			o.DashedRect(m.Expected.X-halfW, m.Expected.Y-halfH, halfW*2, halfH*2, OverlayMuted, 1.5)
-			if m.Found != nil {
-				col := OverlayNG
-				if m.Located {
-					col = OverlayOK
-				}
-				o.Rect(m.Found.X-halfW, m.Found.Y-halfH, halfW*2, halfH*2, col, 2)
-				o.Text(m.Found.X-halfW, m.Found.Y-halfH, 0, -4, col, fmt.Sprintf("%s %s", m.Name, F(m.Ncc, 3)))
-				o.Line(m.Template.X, m.Template.Y, m.Found.X, m.Found.Y, col, 1)
-			}
-		}
+	} else {
+		p.drawAlignOverlay(o)
+	}
+	// Occlusions are painted onto the warped input, so they sit at the same place in every view.
+	for _, occ := range p.occs {
+		o.FillRect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNGFill)
+		o.Rect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNG, 1.5)
 	}
 	if p.dragging {
 		o.DragBox(p.dragStart.X, p.dragStart.Y, p.dragCur.X, p.dragCur.Y, OverlayROI)
@@ -1066,15 +980,16 @@ func (p *AlignPanel) hitTest(x, y float64) int {
 func (p *AlignPanel) Hover(x, y int) string {
 	var img *core.GrayImage
 	switch p.viewKind {
-	case "input":
-		img = p.input
-	case "diff":
+	case "input", "diff", "overlay":
 		img = p.input
 	default:
 		img = p.template
 	}
 	if img == nil || x < 0 || y < 0 || x >= img.Width || y >= img.Height {
 		return ""
+	}
+	if p.viewKind == "overlay" && p.template != nil {
+		return fmt.Sprintf("T %d  I %d", p.template.Data[y*p.template.Width+x], img.Data[y*img.Width+x])
 	}
 	if p.viewKind == "diff" && p.template != nil {
 		d := int(img.Data[y*img.Width+x]) - int(p.template.Data[y*p.template.Width+x])

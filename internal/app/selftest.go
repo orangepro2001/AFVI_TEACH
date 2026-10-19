@@ -204,6 +204,123 @@ func NewSelftest(a *App, out string) *Selftest {
 			ap.requestRun(true)
 			return map[string]any{"newRoi": fmt.Sprintf("%.0f,%.0f %.0f×%.0f", last.X, last.Y, last.W, last.H)}, nil
 		}},
+		{name: "align-overlay", enter: func(a *App) {
+			tab("align")(a)
+			ap := s.panel("align").(*AlignPanel)
+			ap.params = defaultWarpParams()
+			ap.occs = nil
+			ap.dirty = true
+			ap.requestRun(true)
+		}, check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.viewKind != "overlay" {
+				return nil, fmt.Errorf("align-overlay: default view is %q, want overlay", ap.viewKind)
+			}
+			if ap.report == nil || ap.truth == nil || ap.template == nil || ap.input == nil {
+				return nil, fmt.Errorf("align-overlay: no report, truth or images")
+			}
+			// Overlay texture: template in red, warped input in green and blue.
+			pix := PackOverlay(ap.template, ap.input)
+			defer PutRGBA(pix)
+			n := ap.template.Width * ap.template.Height
+			for _, i := range []int{0, n / 3, n / 2, n - 1} {
+				if pix[4*i] != ap.template.Data[i] || pix[4*i+1] != ap.input.Data[i] || pix[4*i+2] != ap.input.Data[i] || pix[4*i+3] != 255 {
+					return nil, fmt.Errorf("align-overlay: pixel %d is %v, want template %d / input %d", i, pix[4*i:4*i+4], ap.template.Data[i], ap.input.Data[i])
+				}
+			}
+			truthLevel := core.TruthLevel(ap.truth.MaxErrorPx, ap.reportConfig)
+			judge := core.JudgeAgainstTruth(ap.report.Level, truthLevel)
+			if ap.report.Level != core.VerdictOK || judge != core.JudgeCorrect {
+				return nil, fmt.Errorf("align-overlay: unwarped input judged %s (%s), truth %s", ap.report.Level, judge, truthLevel)
+			}
+			return map[string]any{"view": ap.viewKind, "verdict": string(ap.report.Level), "truthMaxPx": ap.truth.MaxErrorPx}, nil
+		}},
+		{name: "align-offset", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.tool = "none"
+			setWarpGeometry(&ap.params, warpPresetByID("severe"))
+			ap.dirty = true
+			ap.requestRun(true)
+		}, shot: "native-align-offset.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil || ap.truth == nil || ap.report.Fit == nil {
+				return nil, fmt.Errorf("align-offset: no report, truth or fit")
+			}
+			want := warpPresetByID("severe")
+			if got := ap.reportParams.Tx * float64(ap.lastScale); math.Abs(got-want.Tx) > 1e-9 {
+				return nil, fmt.Errorf("align-offset: report used tx %.3f, want %.3f", got, want.Tx)
+			}
+			// The offset must be visible: a large share of the input differs from the template.
+			differing := 0
+			for i := range ap.template.Data {
+				d := int(ap.template.Data[i]) - int(ap.input.Data[i])
+				if d > 8 || d < -8 {
+					differing++
+				}
+			}
+			if differing*20 < len(ap.template.Data) {
+				return nil, fmt.Errorf("align-offset: only %d of %d pixels differ, the offset did not reach the image", differing, len(ap.template.Data))
+			}
+			w, h := ap.reportW, ap.reportH
+			tp := core.TruthPose(&ap.reportParams, w, h)
+			fp := core.FitPose(*ap.report.Fit, w, h)
+			if math.Hypot(tp.ShiftX, tp.ShiftY) < 10 {
+				return nil, fmt.Errorf("align-offset: true centre shift only (%.2f, %.2f) working px", tp.ShiftX, tp.ShiftY)
+			}
+			if math.Abs(fp.ShiftX-tp.ShiftX) > 1.5 || math.Abs(fp.ShiftY-tp.ShiftY) > 1.5 || math.Abs(fp.ThetaDeg-tp.ThetaDeg) > 0.3 {
+				return nil, fmt.Errorf("align-offset: measured pose %+v is far from the set pose %+v", fp, tp)
+			}
+			truthLevel := core.TruthLevel(ap.truth.MaxErrorPx, ap.reportConfig)
+			judge := core.JudgeAgainstTruth(ap.report.Level, truthLevel)
+			if judge != core.JudgeCorrect {
+				return nil, fmt.Errorf("align-offset: verdict %s but truth %s (%s), max truth error %.3f px", ap.report.Level, truthLevel, judge, ap.truth.MaxErrorPx)
+			}
+			return map[string]any{
+				"verdict": string(ap.report.Level), "judgement": string(judge), "truthMaxPx": ap.truth.MaxErrorPx,
+				"setShift": []float64{tp.ShiftX, tp.ShiftY}, "measuredShift": []float64{fp.ShiftX, fp.ShiftY},
+				"differingPixels": differing,
+			}, nil
+		}},
+		{name: "align-lift", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.params = defaultWarpParams()
+			setWarpGeometry(&ap.params, warpPresetByID("lift"))
+			ap.dirty = true
+			ap.requestRun(true)
+		}, shot: "native-align-lift.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil || ap.truth == nil || math.IsNaN(ap.truth.MaxErrorPx) {
+				return nil, fmt.Errorf("align-lift: no report or truth comparison")
+			}
+			want := warpPresetByID("lift")
+			if ap.reportParams.TiltX != want.TiltX || ap.reportParams.TiltY != want.TiltY {
+				return nil, fmt.Errorf("align-lift: report used tilt (%g, %g), want (%g, %g)", ap.reportParams.TiltX, ap.reportParams.TiltY, want.TiltX, want.TiltY)
+			}
+			differing := 0
+			for i := range ap.template.Data {
+				d := int(ap.template.Data[i]) - int(ap.input.Data[i])
+				if d > 8 || d < -8 {
+					differing++
+				}
+			}
+			if differing*50 < len(ap.template.Data) {
+				return nil, fmt.Errorf("align-lift: only %d of %d pixels differ, the lift did not reach the image", differing, len(ap.template.Data))
+			}
+			truthLevel := core.TruthLevel(ap.truth.MaxErrorPx, ap.reportConfig)
+			judge := core.JudgeAgainstTruth(ap.report.Level, truthLevel)
+			out := map[string]any{
+				"verdict": string(ap.report.Level), "truth": string(truthLevel), "judgement": string(judge),
+				"truthMaxPx": ap.truth.MaxErrorPx, "differingPixels": differing,
+			}
+			return out, nil
+		}},
+		// Leave the tab as it was found for the screenshots that follow.
+		{name: "align-reset", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.params = defaultWarpParams()
+			ap.dirty = true
+			ap.requestRun(true)
+		}},
 		{name: "defect-dark-zh", enter: tab("defect"), shot: "native-defect-dark-zh.png"},
 		{name: "interact-defect-rect", enter: func(a *App) {
 			dp := s.panel("defect").(*DefectPanel)
@@ -507,7 +624,7 @@ func NewSelftest(a *App, out string) *Selftest {
 			},
 		},
 		selftestStep{
-			name: "inspect-merge", enter: func(a *App) {
+			name: "inspect-size", enter: func(a *App) {
 				dp := s.panel("defect").(*DefectPanel)
 				for _, m := range []inspect.Material{inspect.Metal, inspect.SR} {
 					mp := &dp.inspectParams[core.ChRed].Materials[m]
@@ -515,25 +632,32 @@ func NewSelftest(a *App, out string) *Selftest {
 				}
 				dp.paramsOpen = false
 				dp.requestRun()
-			}, shot: "native-defect-inspect-merge.png",
+			}, shot: "native-defect-inspect-size.png",
 			check: func(s *Selftest) (map[string]any, error) {
 				dp := s.panel("defect").(*DefectPanel)
 				if dp.lastReport == nil {
-					return nil, fmt.Errorf("inspect-merge: no report")
+					return nil, fmt.Errorf("inspect-size: no report")
 				}
-				maxFrag := 0
-				for _, d := range dp.lastReport.Defects {
-					if d.Fragments > maxFrag {
-						maxFrag = d.Fragments
+				rep := dp.lastReport
+				ok := rep.Filtered > 0 &&
+					len(rep.Defects) < overkillDefects &&
+					len(rep.Defects)+rep.Filtered == overkillDefects &&
+					rep.FlaggedPixels == overkillFlagged
+				if ok {
+					for _, d := range rep.Defects {
+						if d.Area < 33 {
+							ok = false
+							break
+						}
 					}
 				}
-				if len(dp.lastReport.Defects) >= overkillDefects || maxFrag <= 1 || dp.lastReport.FlaggedPixels != overkillFlagged {
-					return nil, fmt.Errorf("inspect-merge: defects %d (was %d), maxFrag %d, flagged %d (was %d)", len(dp.lastReport.Defects), overkillDefects, maxFrag, dp.lastReport.FlaggedPixels, overkillFlagged)
+				if !ok {
+					return nil, fmt.Errorf("inspect-size: defects %d (was %d), filtered %d, flagged %d (was %d)", len(rep.Defects), overkillDefects, rep.Filtered, rep.FlaggedPixels, overkillFlagged)
 				}
 				return map[string]any{
 					"smallSizeDefects": overkillDefects,
-					"largeSizeDefects": len(dp.lastReport.Defects),
-					"maxFragments":     maxFrag,
+					"largeSizeDefects": len(rep.Defects),
+					"filtered":         rep.Filtered,
 				}, nil
 			},
 		},
@@ -558,7 +682,7 @@ func NewSelftest(a *App, out string) *Selftest {
 					mp.Low = 0
 					mp.High = 255
 					mp.Size = 3
-					mp.MinArea = 4
+					mp.MinArea = 1
 				}
 				dp.renderRev++
 				dp.requestRun()
@@ -1323,7 +1447,7 @@ func NewSelftest(a *App, out string) *Selftest {
 				mp.Low = 0
 				mp.High = math.Min(255, math.Ceil(ms.Mean+22))
 				mp.Size = 3
-				mp.MinArea = 4
+				mp.MinArea = 1
 				dp.requestRun()
 			},
 			check: func(s *Selftest) (map[string]any, error) {
@@ -1401,8 +1525,8 @@ func NewSelftest(a *App, out string) *Selftest {
 				mp := &dp.inspectParams[core.ChRed].Materials[inspect.Metal]
 				mp.Low = 0
 				mp.High = math.Min(255, math.Ceil(ms.Mean+22))
-				mp.Size = 3
-				mp.MinArea = 4
+				mp.Size = 1
+				mp.MinArea = 1
 				dp.requestRun()
 			},
 			check: func(s *Selftest) (map[string]any, error) {
@@ -1481,6 +1605,72 @@ func NewSelftest(a *App, out string) *Selftest {
 					return nil, fmt.Errorf("studio-save: green test image was written")
 				}
 				return map[string]any{"dir": dir, "images": len(meta.Images), "defects": len(meta.Recipe.Defects)}, nil
+			},
+		},
+		selftestStep{
+			name: "studio-warp", enter: func(a *App) {
+				tab("defect")(a)
+				dp := s.panel("defect").(*DefectPanel)
+				dp.warp = core.IdentityWarp
+				setWarpGeometry(&dp.warp, warpPresetByID("severe"))
+				lift := warpPresetByID("lift")
+				dp.warp.TiltX, dp.warp.TiltY = lift.TiltX, lift.TiltY
+				dp.warp.BendAmplitude, dp.warp.BendWavelength = lift.BendAmplitude, lift.BendWavelength
+				dp.renderRev++
+				dp.scrollToWarp = true
+				a.Viewer.Fit()
+				dp.studio.chInit = true
+				dp.studio.channels = [3]bool{true, false, false}
+				dp.studio.good = true
+				dp.studio.recipe = false
+				dp.studio.dir = filepath.Join(s.out, "studio-warp-capture")
+				dp.requestSaveCapture()
+			}, shot: "native-studio-warp.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.studio.last == nil || dp.studio.msgErr {
+					return nil, fmt.Errorf("studio-warp: %s %s", dp.studio.msgKey, dp.studio.msgText)
+				}
+				meta, dir, err := snapfmt.ReadMeta(dp.studio.dir)
+				if err != nil {
+					return nil, fmt.Errorf("studio-warp: %v", err)
+				}
+				w := meta.Recipe.Warp
+				lift := warpPresetByID("lift")
+				if w == nil || w.Tx != 40 || w.Ty != 25 || w.TiltX != lift.TiltX || w.BendAmplitude != lift.BendAmplitude {
+					return nil, fmt.Errorf("studio-warp: capture description carries warp %+v", w)
+				}
+				// camera.exe and the in-process simulation render the same misaligned product.
+				test, err := snapfmt.ReadImage(dir, meta, "red", snapfmt.KindTest)
+				if err != nil {
+					return nil, fmt.Errorf("studio-warp: %v", err)
+				}
+				if want := simulate(s.a, dp, core.ChRed); !bytes.Equal(test.Pix, want.Data) {
+					return nil, fmt.Errorf("studio-warp: camera.exe test image differs from the in-process render")
+				}
+				light := s.a.Light.Clone()
+				_, nominal := core.RenderDefectPair(s.a.Scene.Light, &light, core.ChRed, dp.sceneStrokes(), dp.gvStrokes(), dp.noise)
+				if bytes.Equal(test.Pix, nominal.Data) {
+					return nil, fmt.Errorf("studio-warp: the warped capture equals the nominal one")
+				}
+				// The good sample is the taught reference and stays at the nominal position.
+				good, err := snapfmt.ReadImage(dir, meta, "red", snapfmt.KindGood)
+				if err != nil {
+					return nil, fmt.Errorf("studio-warp: %v", err)
+				}
+				wantGood := core.RenderGoodSample(s.a.Scene.Light, &light, core.ChRed, goodSampleNoise(dp.noise))
+				if !bytes.Equal(good.Pix, wantGood.Data) {
+					return nil, fmt.Errorf("studio-warp: the good sample moved with the warp")
+				}
+				return map[string]any{"dir": dir, "warp": warpSummary(w)}, nil
+			},
+		},
+		// Back to the nominal position for the steps that follow.
+		selftestStep{
+			name: "studio-warp-reset", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				dp.warp = core.IdentityWarp
+				dp.renderRev++
 			},
 		},
 	)
@@ -1676,18 +1866,24 @@ var studioOnlySteps = map[string]bool{
 	"product-off":             true,
 	"product-on":              true,
 	"studio-save":             true,
+	"studio-warp":             true,
+	"studio-warp-reset":       true,
 }
 
 var teachOnlySteps = map[string]bool{
 	"teach-start":           true,
 	"align-dark-zh":         true,
 	"interact-align-roi":    true,
+	"align-overlay":         true,
+	"align-offset":          true,
+	"align-lift":            true,
+	"align-reset":           true,
 	"interact-defect-probe": true,
 	"align-light-ko":        true,
 	"defect-params-dialog":  true,
 	"inspect-good":          true,
 	"inspect-overkill":      true,
-	"inspect-merge":         true,
+	"inspect-size":          true,
 	"inspect-miss":          true,
 	"inspect-relearn":       true,
 	"defaults-detected":     true,
@@ -1758,7 +1954,7 @@ func srRmsDelta(a *App) float64 {
 // simulate renders the red/green/blue test image of the defect panel's current scenario in-process.
 func simulate(a *App, dp *DefectPanel, ch core.CameraChannel) *core.GrayImage {
 	light := a.Light.Clone()
-	_, test := core.RenderDefectPair(a.Scene.Light, &light, ch, dp.sceneStrokes(), dp.gvStrokes(), dp.noise)
+	_, test := core.RenderDefectPairWarped(a.Scene.Light, &light, ch, dp.sceneStrokes(), dp.gvStrokes(), dp.noise, dp.warp)
 	return test
 }
 

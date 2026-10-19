@@ -116,6 +116,24 @@ func PackSignedDiff(golden, test *core.GrayImage) []byte {
 	return dst
 }
 
+// PackOverlay renders the alignment overlay: a (the template) in the red channel, b (the input)
+// in green and blue. Where both images agree the pixel is gray; a displaced edge shows as a red
+// fringe on one side and a cyan fringe on the other.
+func PackOverlay(a, b *core.GrayImage) []byte {
+	n := a.Width * a.Height
+	if m := b.Width * b.Height; m < n {
+		n = m
+	}
+	dst := GetRGBA(4 * a.Width * a.Height)
+	parallelRows(n, func(s, e int) {
+		for i := s; i < e; i++ {
+			o := 4 * i
+			dst[o], dst[o+1], dst[o+2], dst[o+3] = a.Data[i], b.Data[i], b.Data[i], 255
+		}
+	})
+	return dst
+}
+
 // PackAbsDiff renders |a-b|, the web alignment "difference" view.
 func PackAbsDiff(a, b *core.GrayImage) []byte {
 	n := a.Width * a.Height

@@ -15,10 +15,14 @@ type Occlusion struct {
 // WarpParams 是几何与光度变换参数。
 type WarpParams struct {
 	Tx, Ty, ThetaDeg, Scale, ShearX, ShearY float64
-	BendAmplitude, BendWavelength           float64
-	BlurSigma, NoiseSigma                   float64
-	Gain, Offset, Gradient                  float64
-	Occlusions                              []Occlusion
+	// TiltX、TiltY 是"翘起"（透视倾斜，无量纲，0 表示没有）：在旋转/缩放之后，
+	// 把相对中心的位置 u 变成 u/(1 + TiltX*ux/hx + TiltY*uy/hy)（hx、hy 为半宽、半高），
+	// 一侧被压缩、另一侧被拉伸，像板子的一边翘起。要求分母保持为正（|TiltX|+|TiltY| < 1）。
+	TiltX, TiltY                  float64
+	BendAmplitude, BendWavelength float64
+	BlurSigma, NoiseSigma         float64
+	Gain, Offset, Gradient        float64
+	Occlusions                    []Occlusion
 }
 
 // IdentityWarp 是恒等变换。
@@ -48,12 +52,30 @@ func WarpPoint(p *WarpParams, pt Point, width, height int) Point {
 	sin := math.Sin(theta)
 	rx := p.Scale * (cos*dx - sin*dy)
 	ry := p.Scale * (sin*dx + cos*dy)
+	if ax, ay := tiltCoefficients(p, width, height); ax != 0 || ay != 0 {
+		w := 1 + ax*rx + ay*ry
+		rx /= w
+		ry /= w
+	}
 	qx := cx + rx + p.Tx
 	qy := cy + ry + p.Ty
 	if p.BendAmplitude != 0 && p.BendWavelength > 0 {
 		qy += p.BendAmplitude * math.Sin((2*math.Pi*qx)/p.BendWavelength)
 	}
 	return Point{X: qx, Y: qy}
+}
+
+// tiltCoefficients 返回透视倾斜在像素坐标下的系数 (TiltX/hx, TiltY/hy)；没有倾斜或图太小时为 0。
+func tiltCoefficients(p *WarpParams, width, height int) (ax, ay float64) {
+	hx := float64(width-1) / 2
+	hy := float64(height-1) / 2
+	if p.TiltX != 0 && hx > 0 {
+		ax = p.TiltX / hx
+	}
+	if p.TiltY != 0 && hy > 0 {
+		ay = p.TiltY / hy
+	}
+	return ax, ay
 }
 
 // UnwarpPoint 反向映射点；不可逆时返回 (Point{}, false)。
@@ -73,6 +95,15 @@ func UnwarpPoint(p *WarpParams, q Point, width, height int) (Point, bool) {
 	uy := qy - cy - p.Ty
 	if scale == 0 {
 		return Point{}, false
+	}
+	if ax, ay := tiltCoefficients(p, width, height); ax != 0 || ay != 0 {
+		// 正向 v = u/(1 + a·u)，所以 u = v/(1 - a·v)。
+		den := 1 - (ax*ux + ay*uy)
+		if den <= 1e-9 {
+			return Point{}, false
+		}
+		ux /= den
+		uy /= den
 	}
 	invScale := 1 / scale
 	rx := (cos*ux + sin*uy) * invScale

@@ -225,7 +225,7 @@ func (p *DefectPanel) snapMeta() snapfmt.Meta {
 		Model:    scene.Info.Ref(),
 		Width:    scene.W,
 		Height:   scene.H,
-		Recipe:   snapfmt.NewRecipe(scene.Product, p.a.Light.Clone(), p.noise, p.gvStrokes(), p.sceneStrokes()),
+		Recipe:   snapfmt.NewRecipe(scene.Product, p.a.Light.Clone(), p.noise, p.gvStrokes(), p.sceneStrokes()).WithWarp(p.warp),
 		Images:   []snapfmt.Image{},
 	}
 }
@@ -358,6 +358,7 @@ func (p *DefectPanel) requestSnapLoad(path string) {
 				p.strokes = append(p.strokes, strokeEntry{scene: &s, enabled: true})
 			}
 			p.noise = cr.Noise
+			p.warp = cr.Warp
 			p.clearSelection()
 			p.renderRev++
 			p.snapSrc.on = true
@@ -375,7 +376,7 @@ func (p *DefectPanel) snapStale() bool {
 	}
 	if p.renderRev != p.snapSrc.checkedRev {
 		scene := p.a.Scene
-		cur := recipeKey(snapfmt.NewRecipe(scene.Product, p.a.Light.Clone(), p.noise, p.gvStrokes(), p.sceneStrokes()))
+		cur := recipeKey(snapfmt.NewRecipe(scene.Product, p.a.Light.Clone(), p.noise, p.gvStrokes(), p.sceneStrokes()).WithWarp(p.warp))
 		p.snapSrc.stale = cur != recipeKey(p.snapSrc.meta.Recipe)
 		p.snapSrc.checkedRev = p.renderRev
 	}
@@ -511,7 +512,13 @@ func (p *DefectPanel) drawSnapSection() bool {
 			{T("defect.snap.images"), strings.Join(names, ", ")},
 			{T("defect.snap.defects"), fmt.Sprint(len(m.Recipe.Defects))},
 		}
+		if m.Recipe.Warp != nil {
+			rows = append(rows, [2]string{T("defect.snap.warp"), warpSummary(m.Recipe.Warp)})
+		}
 		KVTable("snap-meta", rows)
+		if m.Recipe.Warp != nil {
+			Warn(T("defect.snap.warpNote"))
+		}
 	}
 	if p.snapStale() {
 		Warn(T("defect.snap.stale"))

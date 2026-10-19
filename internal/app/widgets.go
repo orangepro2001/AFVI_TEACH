@@ -356,6 +356,14 @@ func KVTable(id string, rows [][2]string) {
 // DataTable renders a scrollable grid with clipping (only visible rows are built), so
 // tens of thousands of rows stay cheap. Column 0 is selectable; returns the clicked row or -1.
 func DataTable(id string, headers []string, rows int, height float32, cell func(row, col int) string, selected int) int {
+	return DataTableColored(id, headers, rows, height, func(row, col int) (string, *imgui.Vec4) {
+		return cell(row, col), nil
+	}, selected)
+}
+
+// DataTableColored is DataTable whose cells may carry a text colour (nil keeps the default).
+// The first column is the selectable row label and is never coloured.
+func DataTableColored(id string, headers []string, rows int, height float32, cell func(row, col int) (string, *imgui.Vec4), selected int) int {
 	clicked := -1
 	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBorders | imgui.TableFlagsScrollY | imgui.TableFlagsScrollX |
 		imgui.TableFlagsSizingFixedFit | imgui.TableFlagsResizable
@@ -375,13 +383,20 @@ func DataTable(id string, headers []string, rows int, height float32, cell func(
 			imgui.TableNextRow()
 			for c := range headers {
 				imgui.TableSetColumnIndex(int32(c))
+				text, col := cell(r, c)
 				if c == 0 {
-					if imgui.SelectableBoolV(cell(r, 0)+"##row"+strconv.Itoa(r), r == selected, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
+					if imgui.SelectableBoolV(text+"##row"+strconv.Itoa(r), r == selected, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
 						clicked = r
 					}
 					continue
 				}
-				imgui.TextUnformatted(cell(r, c))
+				if col != nil {
+					imgui.PushStyleColorVec4(imgui.ColText, *col)
+				}
+				imgui.TextUnformatted(text)
+				if col != nil {
+					imgui.PopStyleColor()
+				}
 			}
 		}
 	}

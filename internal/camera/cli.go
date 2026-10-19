@@ -35,6 +35,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	noiseReadFlag := fs.Float64("noise-read", 0, "sensor noise sigma")
 	noiseShotFlag := fs.Float64("noise-shot", 0, "sensor shot gain")
 	noiseSeedFlag := fs.Uint("noise-seed", 1, "sensor noise seed")
+	warpFlags := newWarpFlags(fs)
 	listFlag := fs.Bool("list", false, "print the ids of the models of the active machine")
 	infoFlag := fs.String("info", "", "print a summary of the capture at that path")
 	if err := fs.Parse(args); err != nil {
@@ -114,6 +115,12 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		cr.Noise.ShotGain = *noiseShotFlag
 		cr.Noise.Seed = uint32(*noiseSeedFlag)
 		recipe = snap.NewRecipe(cr.Product, cr.Light, cr.Noise, cr.Defects, cr.Scene)
+	}
+
+	recipe, err := warpFlags.apply(fs, recipe)
+	if err != nil {
+		fmt.Fprintf(stderr, "camera: %v\n", err)
+		return 2
 	}
 
 	if *modeFlag == "recipe" {
@@ -233,6 +240,10 @@ func printInfo(w io.Writer, path string) error {
 	}
 	n := meta.Recipe.Noise
 	fmt.Fprintf(w, "noise: readSigma=%g shotGain=%g seed=%d\n", n.ReadSigma, n.ShotGain, n.Seed)
+	if wp := meta.Recipe.Warp; wp != nil {
+		fmt.Fprintf(w, "warp: dx=%g dy=%g rot=%g scale=%g shear=(%g,%g) tilt=(%g,%g) bend=%g wave=%g\n",
+			wp.Tx, wp.Ty, wp.ThetaDeg, wp.Scale, wp.ShearX, wp.ShearY, wp.TiltX, wp.TiltY, wp.BendAmplitude, wp.BendWavelength)
+	}
 	bright, dark := 0, 0
 	for _, d := range meta.Recipe.Defects {
 		if d.Kind == 0 {

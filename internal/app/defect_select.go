@@ -18,7 +18,7 @@ type selectionState struct {
 
 // PaletteSupports 报告面板支持的选择工具。
 func (p *DefectPanel) PaletteSupports(t PaletteTool) bool {
-	if p.mode == modeDetect {
+	if p.mode == modeDetect || p.warped() {
 		return false
 	}
 	switch t {

@@ -63,6 +63,8 @@ scene 的 `rev` 在一个 session 内严格递增。getFrame 带上教学程序�
 
 三种图都与 `camera.exe` 用同一份描述写出的 PNG **逐字节相同**（同一套渲染函数、同一份 `snap.Meta`）；联机的 scene 里没有图像，描述本身就是完整的配方。
 
+描述里的可选字段 `recipe.warp`（`tx ty thetaDeg scale shearX shearY tiltX tiltY bendAmplitude bendWavelength`）记录产品在抓拍里的错位与翘起，没有错位时整个字段不出现；`liveRenderer` 与 `camera.Render` 都通过 `core.RenderDefectPairWarped` 渲染，所以带 warp 的描述同样逐字节相同。`good` 帧是示教基准，始终在标称位置，不受 warp 影响。教学程序采用带 warp 的修订时，缺陷页的抓拍信息里会多一行"错位/翘起"并提示检出仍按设计位置判断。
+
 ## 工作室一侧
 
 - 每帧检查场景指针与渲染修订，变化后等 120 ms 无新变化再发布，连续拖动时最迟 400 ms 发布一次；配方（型号 + 光照 + 虚拟良品 + 噪声 + 笔画）没变就不重复发布。
@@ -101,10 +103,10 @@ scene 的 `rev` 在一个 session 内严格递增。getFrame 带上教学程序�
       "learned": true,
       "params": {
         "materials": {
-          "base":  {"enabled": false, "low": 0,  "high": 255, "size": 3, "minArea": 4, "localBackground": false},
-          "sr":    {"enabled": true,  "low": 2,  "high": 30,  "size": 3, "minArea": 4, "localBackground": false},
-          "open":  {"enabled": false, "low": 0,  "high": 255, "size": 3, "minArea": 4, "localBackground": false},
-          "metal": {"enabled": true,  "low": 69, "high": 255, "size": 3, "minArea": 4, "localBackground": true}
+          "base":  {"enabled": false, "low": 0,  "high": 255, "size": 3, "minArea": 1, "localBackground": false},
+          "sr":    {"enabled": true,  "low": 2,  "high": 30,  "size": 3, "minArea": 1, "localBackground": false},
+          "open":  {"enabled": false, "low": 0,  "high": 255, "size": 3, "minArea": 1, "localBackground": false},
+          "metal": {"enabled": true,  "low": 69, "high": 255, "size": 3, "minArea": 1, "localBackground": true}
         },
         "edgeMargin": 6,
         "backgroundRadius": 2

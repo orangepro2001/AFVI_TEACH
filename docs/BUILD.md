@@ -110,7 +110,7 @@ bin/camera -ref reference -list
 ### 页面功能
 - **光照页**：左侧滑块调节亮度，左键拖框测量 GV
 - **对齐页**：左键新建 ROI/遮挡，选择移动，Delete 删除
-- **缺陷页**：画点/线/块/异物/污染，探查缺陷；画框工具（矩形 / 椭圆 / 钢笔，右键闭合多边形，Esc 取消，Backspace 撤销顶点）；不良颜色（按颜色模拟，R/G/B 滑块与七个预设）；虚拟良品（纹理强度 / 种子 / 相关长度倍率，换一块板、恢复默认）与默认不良（约 10 个 SR 内的小亮点，可重新生成 / 移除 / 隐藏轮廓）；选择工具（悬浮面板的点选 / 矩形框 / 椭圆框 / 多边形框）与浮动"选中的不良"窗口批量调参；检出参数按 F1 唤出/关闭浮动窗口，窗口内按相机通道各有一套参数，逐材质（metal / sr / open / base）设置可接受亮度区间 [Low, High]、分组尺寸 Size 与最小面积 MinArea，区间由良品样本学习得到，并有全局的边缘忽略（0–64 像素，默认 6）
+- **缺陷页**：画点/线/块/异物/污染，探查缺陷；画框工具（矩形 / 椭圆 / 钢笔，右键闭合多边形，Esc 取消，Backspace 撤销顶点）；不良颜色（按颜色模拟，R/G/B 滑块与七个预设）；虚拟良品（纹理强度 / 种子 / 相关长度倍率，换一块板、恢复默认）与默认不良（约 10 个 SR 内的小亮点，可重新生成 / 移除 / 隐藏轮廓）；选择工具（悬浮面板的点选 / 矩形框 / 椭圆框 / 多边形框）与浮动"选中的不良"窗口批量调参；检出参数按 F1 唤出/关闭浮动窗口，窗口内按相机通道各有一套参数，逐材质（metal / sr / open / base）设置可接受亮度区间 [Low, High]、连续像素数 Size 与最小面积 MinArea，区间由良品样本学习得到，并有全局的边缘忽略（0–64 像素，默认 6）
 
 ## 技术特性
 
@@ -125,7 +125,7 @@ bin/camera -ref reference -list
 - 两个 GUI 程序：教学程序（对齐 + 缺陷检出）与相机合成工作室（光照与 GV + 缺陷合成，含「输出」栏，把场景保存成抓拍交给教学程序载入）
 - 界面字号 `-fontsize <10-28>`（默认 16），布局常量按字号缩放
 - 独立的检出算法包 `internal/inspect`（只看测试图与设计材质图，含全局边缘忽略）
-- 配置包 16 个测试 + 核心 73 个测试 + 检出 31 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试；渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致，检出不再与 TS 版本对照
+- 配置包 16 个测试 + 核心 73 个测试 + 检出 41 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 19 个测试；渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致，检出不再与 TS 版本对照
 
 ## 目录结构
 
@@ -138,7 +138,7 @@ AFVI_TEACH/
 │   ├── app/          # UI 应用（run.go、app.go、win32.go、dlg_config.go、jobs.go、
 │   │                 # viewer.go、shapetool.go、models.go、pack.go、widgets.go、theme.go、i18n.go、
 │   │                 # panel_light.go、panel_align.go、panel_defect.go、toolpalette.go、
-│   │                 # defect_select.go、defect_product.go、inspect_bridge.go、
+│   │                 # defect_select.go、defect_product.go、align_view.go、warp_ui.go、inspect_bridge.go、
 │   │                 # profile.go、scale.go、studio_capture.go、
 │   │                 # live.go、live_studio.go、live_teach.go、teach_save.go、live_selftest.go、
 │   │                 # selftest.go、capture_windows.go）
@@ -193,7 +193,7 @@ export GOPROXY=https://goproxy.cn,direct
 
 如果要修改代码：
 
-1. **纯算法修改**：仿真改 `internal/core/`（含虚拟良品 `product.go` 与笔画几何 `strokegeom.go`），检出改 `internal/inspect/`（检出算法只依赖标准库，只看测试图与设计材质图），相机改 `internal/camera/` 与 `internal/snap/`，联机协议改 `internal/link/`（同时更新 `docs/LINK.md`），运行 `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/...`（配置包 16 个测试 + 核心 73 个测试 + 检出 35 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试）
+1. **纯算法修改**：仿真改 `internal/core/`（含虚拟良品 `product.go` 与笔画几何 `strokegeom.go`），检出改 `internal/inspect/`（检出算法只依赖标准库，只看测试图与设计材质图），相机改 `internal/camera/` 与 `internal/snap/`，联机协议改 `internal/link/`（同时更新 `docs/LINK.md`），运行 `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/...`（配置包 16 个测试 + 核心 73 个测试 + 检出 41 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试）
 2. **UI 修改**：修改对应的 `internal/app/panel_*.go` 或 `internal/app/viewer.go`
 3. **构建验证**：`./scripts/build-wsl.sh`，传输到 Windows 运行
 4. **自测验证**：在 Windows 运行 `.\bin\teach-imgui.exe -selftest -out <dir>` 与 `.\bin\camera-gui.exe -selftest -out <dir>`（步骤按程序过滤，两者都需要 `camera.exe` 放在一起）

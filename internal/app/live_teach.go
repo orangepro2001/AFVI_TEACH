@@ -321,6 +321,9 @@ func (p *DefectPanel) drawLiveSection() {
 			[2]string{T("defect.snap.model"), m.Model.ID},
 			[2]string{T("defect.snap.defects"), fmt.Sprint(len(m.Recipe.Defects))},
 		)
+		if m.Recipe.Warp != nil {
+			rows = append(rows, [2]string{T("defect.snap.warp"), warpSummary(m.Recipe.Warp)})
+		}
 	}
 	KVTable("live-kv", rows)
 	if p.liveMismatch != "" && p.liveFollow {

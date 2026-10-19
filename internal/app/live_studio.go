@@ -112,7 +112,7 @@ func (r *liveRenderer) pair(ch core.CameraChannel, kind string) *core.GrayImage 
 		return img
 	}
 	light := r.cr.Light
-	golden, test := core.RenderDefectPair(r.scene.Light, &light, ch, r.cr.Scene, r.cr.Defects, r.cr.Noise)
+	golden, test := core.RenderDefectPairWarped(r.scene.Light, &light, ch, r.cr.Scene, r.cr.Defects, r.cr.Noise, r.cr.Warp)
 	if kind == link.KindGolden {
 		r.side = map[snapKey]*core.GrayImage{{ch: ch, kind: link.KindTest}: test}
 		return golden

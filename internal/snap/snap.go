@@ -131,6 +131,23 @@ type SceneStroke struct {
 	Factor   float64 `json:"factor"`
 }
 
+// Warp is where the product sits and how it is deformed when the camera captures it:
+// misalignment (offset in pixels, rotation, scale, shear) and lift (tilt = perspective, bend).
+// The identity warp is stored as no warp at all (Recipe.Warp is nil). Field meanings are those of
+// core.WarpParams; photometric fields do not belong to a capture's geometry.
+type Warp struct {
+	Tx             float64 `json:"tx"`
+	Ty             float64 `json:"ty"`
+	ThetaDeg       float64 `json:"thetaDeg"`
+	Scale          float64 `json:"scale"`
+	ShearX         float64 `json:"shearX"`
+	ShearY         float64 `json:"shearY"`
+	TiltX          float64 `json:"tiltX"`
+	TiltY          float64 `json:"tiltY"`
+	BendAmplitude  float64 `json:"bendAmplitude"`
+	BendWavelength float64 `json:"bendWavelength"`
+}
+
 // Recipe is the full simulation recipe of a capture.
 type Recipe struct {
 	Product      Product       `json:"product"`
@@ -138,6 +155,38 @@ type Recipe struct {
 	Noise        Noise         `json:"noise"`
 	Defects      []Defect      `json:"defects"`
 	SceneStrokes []SceneStroke `json:"sceneStrokes"`
+	Warp         *Warp         `json:"warp,omitempty"`
+}
+
+// WithWarp returns r with the geometric part of w as its warp (nil when that part is the identity).
+func (r Recipe) WithWarp(w core.WarpParams) Recipe {
+	if w.GeometryIdentity() {
+		r.Warp = nil
+		return r
+	}
+	g := w.Geometry()
+	r.Warp = &Warp{
+		Tx: g.Tx, Ty: g.Ty, ThetaDeg: g.ThetaDeg, Scale: g.Scale, ShearX: g.ShearX, ShearY: g.ShearY,
+		TiltX: g.TiltX, TiltY: g.TiltY, BendAmplitude: g.BendAmplitude, BendWavelength: g.BendWavelength,
+	}
+	return r
+}
+
+// CoreWarp is the recipe's warp as core.WarpParams (core.IdentityWarp when there is none).
+func (r Recipe) CoreWarp() core.WarpParams {
+	if r.Warp == nil {
+		return core.IdentityWarp
+	}
+	w := r.Warp
+	out := core.WarpParams{
+		Tx: w.Tx, Ty: w.Ty, ThetaDeg: w.ThetaDeg, Scale: w.Scale, ShearX: w.ShearX, ShearY: w.ShearY,
+		TiltX: w.TiltX, TiltY: w.TiltY, BendAmplitude: w.BendAmplitude, BendWavelength: w.BendWavelength,
+		Gain: 1,
+	}
+	if out.Scale == 0 {
+		out.Scale = 1
+	}
+	return out
 }
 
 // Meta is the content of the description file.
@@ -161,6 +210,7 @@ type CoreRecipe struct {
 	Noise   core.SensorNoise
 	Defects []core.DefectStroke
 	Scene   []core.SceneStroke
+	Warp    core.WarpParams // core.IdentityWarp when the recipe has no warp
 }
 
 // NewRecipe converts simulation settings to the wire format (deep copy; nil slices become empty non-nil slices so the JSON shows [] not null).
@@ -275,6 +325,7 @@ func (r Recipe) Core() CoreRecipe {
 		},
 		Defects: make([]core.DefectStroke, 0, len(r.Defects)),
 		Scene:   make([]core.SceneStroke, 0, len(r.SceneStrokes)),
+		Warp:    r.CoreWarp(),
 	}
 	for m := 0; m < 4; m++ {
 		out.Product.Materials[m] = core.ProductMaterial{
@@ -448,6 +499,9 @@ func (m *Meta) Validate() error {
 	}
 	if m.Recipe.Product.Strength < 0 {
 		return fmt.Errorf("snap: negative product strength %v", m.Recipe.Product.Strength)
+	}
+	if err := core.ValidateCaptureWarp(m.Recipe.CoreWarp()); err != nil {
+		return fmt.Errorf("snap: %w", err)
 	}
 	for i, d := range m.Recipe.Defects {
 		if err := validateDefect(d); err != nil {

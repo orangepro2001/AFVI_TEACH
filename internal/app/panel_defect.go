@@ -75,7 +75,7 @@ func init() {
 		"defect.section.probe":             "探查",
 		"defect.result.empty":              "尚未执行检出。",
 		"defect.result.defectCount":        "检出数",
-		"defect.result.filteredCount":      "因 MinArea 滤除的分组",
+		"defect.result.filteredCount":      "因 Size/MinArea 滤除的连通块",
 		"defect.result.flaggedPixels":      "越界像素总数",
 		"defect.mcol.material":             "材质",
 		"defect.mcol.pixels":               "像素",
@@ -93,7 +93,6 @@ func init() {
 		"defect.col.peakGv":                "峰值 GV",
 		"defect.col.excess":                "超出量",
 		"defect.col.meanGv":                "均值 GV",
-		"defect.col.fragments":             "碎块数",
 		"defect.polarity.bright":           "过亮",
 		"defect.polarity.dark":             "过暗",
 		"defect.kind.bright":               "亮",
@@ -103,14 +102,14 @@ func init() {
 		"defect.probe.row":                 "{m}：{pixels} 像素，均值 {mean} [{min}–{max}]，区间 [{low}, {high}]，过亮 {bright} / 过暗 {dark}",
 		"defect.probe.disabled":            "{m}：该材质已关闭检出，框内像素不会被标记。",
 		"defect.probe.allInside":           "框内所有像素都在可接受区间内，没有像素被标记：区间过宽就会漏检。",
-		"defect.probe.filtered":            "有 {pixels} 个越界像素被标记，但所在分组小于 MinArea 被滤除，所以没有缺陷。",
+		"defect.probe.filtered":            "有 {pixels} 个越界像素被标记，但它们的连续像素数不足 Size（或小于 MinArea）被滤除，所以没有缺陷。",
 		"defect.probe.detected":            "框内有 {count} 个缺陷。",
 		"defect.insp.channel":              "检出参数（通道 {name}；每个通道各自一套）",
-		"defect.insp.explain":              "检出只看测试图的亮度：某材质的像素落在 [Low, High] 之外就被标记（良品也会，即过检）；区间放太宽会漏检；Size 小则得到很多小缺陷，Size 大则相邻的合并成一个大缺陷；分组面积小于 MinArea 的被丢弃。",
+		"defect.insp.explain":              "检出只看测试图的亮度，逐像素判断：某材质的像素落在 [Low, High] 之外就被标记（良品也会，即过检）；区间放太宽会漏检。缺陷是相互接触（8 连通）的被标记像素：至少有 Size 个连续的被标记像素才算缺陷，中间隔着未被标记的像素就不连续（例如 High=100、Size=2 时，105,106 会被检出，105,99,102 不会），不做膨胀、合并或取平均。MinArea 是连通块像素数的额外下限（实际阈值取 Size 与 MinArea 中较大者，默认 1）。",
 		"defect.insp.enabled":              "启用该材质",
 		"defect.insp.low":                  "下限 Low",
 		"defect.insp.high":                 "上限 High",
-		"defect.insp.size":                 "分组尺寸 Size",
+		"defect.insp.size":                 "连续像素 Size",
 		"defect.insp.minArea":              "最小面积 MinArea",
 		"defect.insp.stats":                "当前图统计：{pixels} 像素，均值 {mean}，σ {std}，范围 [{min}–{max}]",
 		"defect.insp.learnK":               "学习系数 k",
@@ -222,7 +221,7 @@ func init() {
 		"defect.section.probe":             "Probe",
 		"defect.result.empty":              "Detection has not been run yet.",
 		"defect.result.defectCount":        "Defects",
-		"defect.result.filteredCount":      "Groups below MinArea",
+		"defect.result.filteredCount":      "Blocks below Size/MinArea",
 		"defect.result.flaggedPixels":      "Flagged pixels",
 		"defect.mcol.material":             "Material",
 		"defect.mcol.pixels":               "Pixels",
@@ -240,7 +239,6 @@ func init() {
 		"defect.col.peakGv":                "Peak GV",
 		"defect.col.excess":                "Excess",
 		"defect.col.meanGv":                "Mean GV",
-		"defect.col.fragments":             "Fragments",
 		"defect.polarity.bright":           "Bright",
 		"defect.polarity.dark":             "Dark",
 		"defect.kind.bright":               "Bright",
@@ -250,14 +248,14 @@ func init() {
 		"defect.probe.row":                 "{m}: {pixels} pixels, mean {mean} [{min}–{max}], range [{low}, {high}], bright {bright} / dark {dark}",
 		"defect.probe.disabled":            "{m}: inspection is disabled for this material, so its pixels in the box are never flagged.",
 		"defect.probe.allInside":           "Every pixel in the box is inside the accepted interval, so nothing was flagged: a too-wide range misses defects.",
-		"defect.probe.filtered":            "{pixels} out-of-range pixels were flagged, but their group is smaller than MinArea and was dropped, so there is no defect.",
+		"defect.probe.filtered":            "{pixels} out-of-range pixels were flagged, but no contiguous block of them reaches Size (or MinArea), so they were dropped and there is no defect.",
 		"defect.probe.detected":            "{count} defects in the box.",
 		"defect.insp.channel":              "Inspection parameters (channel {name}; one set per channel)",
-		"defect.insp.explain":              "Inspection only looks at the test image brightness: a pixel of a material outside [Low, High] is flagged (a good product can be flagged too, i.e. over-kill); a too-wide range misses defects; a small Size yields many small defects while a large Size merges neighbours into one big defect; groups smaller than MinArea are dropped.",
+		"defect.insp.explain":              "Inspection only looks at the test image brightness and judges every pixel on its own: a pixel of a material outside [Low, High] is flagged (a good product can be flagged too, i.e. over-kill); a too-wide range misses defects. A defect is a block of touching (8-connected) flagged pixels with at least Size contiguous flagged pixels; an unflagged pixel in between breaks the block (for example with High=100 and Size=2, 105,106 is detected but 105,99,102 is not). There is no dilation, no merging and no averaging. MinArea is an extra lower bound on the block's pixel count (the effective threshold is the larger of Size and MinArea, default 1).",
 		"defect.insp.enabled":              "Enabled",
 		"defect.insp.low":                  "Low",
 		"defect.insp.high":                 "High",
-		"defect.insp.size":                 "Size",
+		"defect.insp.size":                 "Size (contiguous px)",
 		"defect.insp.minArea":              "MinArea",
 		"defect.insp.stats":                "Current image: {pixels} px, mean {mean}, σ {std}, range [{min}–{max}]",
 		"defect.insp.learnK":               "Learn factor k",
@@ -369,7 +367,7 @@ func init() {
 		"defect.section.probe":             "탐색",
 		"defect.result.empty":              "아직 검출을 실행하지 않았습니다.",
 		"defect.result.defectCount":        "검출 수",
-		"defect.result.filteredCount":      "MinArea 미만 제외 그룹",
+		"defect.result.filteredCount":      "Size/MinArea 미만 제외 블록",
 		"defect.result.flaggedPixels":      "범위 밖 픽셀 수",
 		"defect.mcol.material":             "재질",
 		"defect.mcol.pixels":               "픽셀",
@@ -387,7 +385,6 @@ func init() {
 		"defect.col.peakGv":                "피크 GV",
 		"defect.col.excess":                "초과량",
 		"defect.col.meanGv":                "평균 GV",
-		"defect.col.fragments":             "조각 수",
 		"defect.polarity.bright":           "과밝음",
 		"defect.polarity.dark":             "과어두움",
 		"defect.kind.bright":               "밝음",
@@ -397,14 +394,14 @@ func init() {
 		"defect.probe.row":                 "{m}: {pixels} 픽셀, 평균 {mean} [{min}–{max}], 구간 [{low}, {high}], 과밝음 {bright} / 과어두움 {dark}",
 		"defect.probe.disabled":            "{m}: 이 재질의 검출이 꺼져 있어 박스 안 픽셀은 표시되지 않습니다.",
 		"defect.probe.allInside":           "박스 안 모든 픽셀이 허용 구간 안에 있어 아무것도 표시되지 않았습니다: 구간이 너무 넓으면 결함을 놓칩니다.",
-		"defect.probe.filtered":            "{pixels}개의 범위 밖 픽셀이 표시되었지만 그 그룹이 MinArea보다 작아 제외되어 결함이 없습니다.",
+		"defect.probe.filtered":            "{pixels}개의 범위 밖 픽셀이 표시되었지만 연속된 픽셀 수가 Size(또는 MinArea)에 못 미쳐 제외되어 결함이 없습니다.",
 		"defect.probe.detected":            "박스 안에 결함이 {count}개 있습니다.",
 		"defect.insp.channel":              "검출 파라미터 (채널 {name}; 채널마다 별도)",
-		"defect.insp.explain":              "검출은 테스트 이미지의 밝기만 봅니다: 어떤 재질의 픽셀이 [Low, High] 밖이면 표시됩니다(양품도 표시될 수 있으며 이를 과검출이라 합니다). 구간이 너무 넓으면 결함을 놓칩니다. Size가 작으면 작은 결함이 많이 생기고, Size가 크면 인접한 것들이 하나의 큰 결함으로 합쳐집니다. 그룹 면적이 MinArea보다 작으면 제외됩니다.",
+		"defect.insp.explain":              "검출은 테스트 이미지의 밝기만 보고 픽셀 하나씩 판단합니다: 어떤 재질의 픽셀이 [Low, High] 밖이면 표시됩니다(양품도 표시될 수 있으며 이를 과검출이라 합니다). 구간이 너무 넓으면 결함을 놓칩니다. 결함은 서로 맞닿은(8방향 연결) 표시 픽셀 덩어리이며 연속된 표시 픽셀이 Size개 이상이어야 합니다. 사이에 표시되지 않은 픽셀이 있으면 연속이 끊깁니다(예: High=100, Size=2이면 105,106은 검출되지만 105,99,102는 검출되지 않음). 팽창, 병합, 평균은 사용하지 않습니다. MinArea는 덩어리 픽셀 수의 추가 하한입니다(실제 기준은 Size와 MinArea 중 큰 값, 기본 1).",
 		"defect.insp.enabled":              "사용",
 		"defect.insp.low":                  "하한 Low",
 		"defect.insp.high":                 "상한 High",
-		"defect.insp.size":                 "그룹 크기 Size",
+		"defect.insp.size":                 "연속 픽셀 Size",
 		"defect.insp.minArea":              "최소 면적 MinArea",
 		"defect.insp.stats":                "현재 이미지: {pixels} 픽셀, 평균 {mean}, σ {std}, 범위 [{min}–{max}]",
 		"defect.insp.learnK":               "학습 계수 k",
@@ -521,6 +518,8 @@ type DefectPanel struct {
 	viewKind          string // "test" | "golden" | "diff"
 	channel           core.CameraChannel
 	noise             core.SensorNoise
+	warp              core.WarpParams // 拍摄时产品的错位/翘起（只含几何部分）；恒等时与旧行为逐字节相同
+	scrollToWarp      bool            // 自测用：下一帧把"错位与翘起"分区滚到可见处
 
 	inspectParams [3]inspect.Params // 每个相机通道一套检出参数
 	learned       [3]bool           // 该通道是否已学习过区间
@@ -605,6 +604,7 @@ func newDefectPanel(a *App, mode defectMode) *DefectPanel {
 		viewKind:          "test",
 		channel:           core.ChRed,
 		noise:             core.SensorNoise{Seed: 1},
+		warp:              core.IdentityWarp,
 		randomCount:       10,
 		randomSeed:        1,
 		randomKind:        core.RandomMixedKind,
@@ -837,6 +837,7 @@ func (p *DefectPanel) requestRun() {
 	light := a.Light.Clone()
 	ch := p.channel
 	noise := p.noise
+	warp := p.warp
 	params := p.inspectParams[ch]
 	needLearn := doInspect && (!p.learned[ch] || p.relearn)
 	k := p.learnK
@@ -879,7 +880,7 @@ func (p *DefectPanel) requestRun() {
 			test = res.test
 			golden = core.RenderChannel(scene.Light, &light, ch)
 		} else if needRender {
-			golden, test = core.RenderDefectPair(scene.Light, &light, ch, sc, gv, noise)
+			golden, test = core.RenderDefectPairWarped(scene.Light, &light, ch, sc, gv, noise, warp)
 		}
 		if needLearn {
 			var good *core.GrayImage
@@ -1000,13 +1001,14 @@ func (p *DefectPanel) requestRender() {
 	light := a.Light.Clone()
 	ch := p.channel
 	noise := p.noise
+	warp := p.warp
 	viewKind := p.viewKind
 	gv := p.gvStrokes()
 	sceneStr := p.sceneStrokes()
 	golden, test := p.golden, p.test
 	a.Jobs.Run("defect", func() func() {
 		if needRender {
-			golden, test = core.RenderDefectPair(scene.Light, &light, ch, sceneStr, gv, noise)
+			golden, test = core.RenderDefectPairWarped(scene.Light, &light, ch, sceneStr, gv, noise, warp)
 		}
 		var pix []byte
 		switch viewKind {
@@ -1729,6 +1731,10 @@ func (p *DefectPanel) DrawLeft() {
 		Note(T("defect.noise.note"))
 	}
 
+	if p.mode == modeAuthor && p.drawWarpSection() {
+		changed = true
+	}
+
 	if Section(T("defect.section.tools"), "defect-tools") {
 		if p.mode == modeDetect && ToolButton(T("defect.tool.probe"), "defect-probe", p.tool == toolProbe) {
 			p.tool = toolProbe
@@ -1976,7 +1982,7 @@ func (p *DefectPanel) DrawRight() {
 
 			headers := []string{
 				T("defect.col.material"), T("defect.col.polarity"), T("defect.col.area"), T("defect.col.size"),
-				T("defect.col.peakGv"), T("defect.col.excess"), T("defect.col.meanGv"), T("defect.col.fragments"),
+				T("defect.col.peakGv"), T("defect.col.excess"), T("defect.col.meanGv"),
 			}
 			defects := r.Defects
 			n := len(defects)
@@ -2001,10 +2007,8 @@ func (p *DefectPanel) DrawRight() {
 					return fmt.Sprint(d.PeakGV)
 				case 5:
 					return F(d.Excess, 1)
-				case 6:
-					return F(d.MeanGV, 1)
 				}
-				return fmt.Sprint(d.Fragments)
+				return F(d.MeanGV, 1)
 			}, -1)
 			if clicked >= 0 && clicked < n {
 				a.Viewer.CenterOn(defects[clicked].CentroidX, defects[clicked].CentroidY)
@@ -2093,7 +2097,8 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 			}
 		}
 	}
-	if p.showMarks {
+	// With a misalignment the strokes (product coordinates) no longer sit where the image shows them.
+	if p.showMarks && !p.warped() {
 		for _, e := range p.strokes {
 			col := OverlayROI
 			if !e.enabled {
@@ -2128,7 +2133,9 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 			}
 		}
 	}
-	p.drawSelectionOverlay(o)
+	if !p.warped() {
+		p.drawSelectionOverlay(o)
+	}
 	if p.probeRect != nil {
 		o.DashedRect(p.probeRect.X, p.probeRect.Y, p.probeRect.W, p.probeRect.H, OverlayProbe, 1.5)
 	}
@@ -2142,6 +2149,9 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 }
 
 func (p *DefectPanel) Pointer(ev PointerEvent) bool {
+	if p.mode == modeAuthor && p.warped() {
+		return false // painting and selecting work in the product's own coordinates
+	}
 	if p.tool == toolFrame && p.frame != nil {
 		owned, res := p.frame.Pointer(ev)
 		if res != nil {

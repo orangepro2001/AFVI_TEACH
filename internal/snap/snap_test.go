@@ -134,6 +134,9 @@ func TestValidate(t *testing.T) {
 		{"image file subdir", func(m *Meta) { m.Images[0].File = "a/b.png" }},
 		{"sha256 short", func(m *Meta) { m.Images[0].SHA256 = "abc" }},
 		{"image size mismatch", func(m *Meta) { m.Images[0].Width = 32 }},
+		{"warp tilt too large", func(m *Meta) { m.Recipe.Warp = &Warp{Scale: 1, TiltX: 0.8} }},
+		{"warp shift too large", func(m *Meta) { m.Recipe.Warp = &Warp{Scale: 1, Tx: 5000} }},
+		{"warp bend without wavelength", func(m *Meta) { m.Recipe.Warp = &Warp{Scale: 1, BendAmplitude: 5} }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,5 +216,67 @@ func TestChannelNames(t *testing.T) {
 	}
 	if got := ImageFile("blue", "good"); got != "blue-good.png" {
 		t.Errorf("ImageFile(blue,good) = %q", got)
+	}
+}
+
+func TestRecipeWarp(t *testing.T) {
+	product, light, noise, defects, scene := sampleRecipe()
+	base := NewRecipe(product, light, noise, defects, scene)
+	if base.Warp != nil {
+		t.Fatalf("a fresh recipe has no warp")
+	}
+	if got := base.CoreWarp(); !reflect.DeepEqual(got, core.IdentityWarp) {
+		t.Fatalf("no warp must read as the identity, got %+v", got)
+	}
+	// 恒等几何（以及只有光度部分的变化）存成"没有 warp"，描述文件里不出现该字段。
+	for _, w := range []core.WarpParams{{}, core.IdentityWarp, {Scale: 1, Gain: 1.4, BlurSigma: 2}} {
+		r := base.WithWarp(w)
+		if r.Warp != nil {
+			t.Fatalf("identity geometry %+v stored as %+v", w, r.Warp)
+		}
+		data, err := json.Marshal(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "warp") {
+			t.Fatalf("recipe JSON mentions warp: %s", data)
+		}
+	}
+	w := core.WarpParams{
+		Tx: 12.5, Ty: -7, ThetaDeg: 0.6, Scale: 1.01, ShearX: 0.01, ShearY: -0.02,
+		TiltX: 0.12, TiltY: -0.08, BendAmplitude: 9, BendWavelength: 1100,
+		Gain: 1.4, BlurSigma: 3, // 光度部分不进入配方
+	}
+	r := base.WithWarp(w)
+	if r.Warp == nil {
+		t.Fatalf("warp missing")
+	}
+	got := r.CoreWarp()
+	want := w.Geometry()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip %+v, want %+v", got, want)
+	}
+	if cr := r.Core(); !reflect.DeepEqual(cr.Warp, want) {
+		t.Fatalf("Core().Warp = %+v, want %+v", cr.Warp, want)
+	}
+	// JSON 往返。
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Recipe
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Warp == nil || *back.Warp != *r.Warp {
+		t.Fatalf("JSON round trip: %+v vs %+v", back.Warp, r.Warp)
+	}
+	// 去掉 warp 后恢复为原配方。
+	if again := r.WithWarp(core.IdentityWarp); again.Warp != nil {
+		t.Fatalf("warp not removed: %+v", again.Warp)
+	}
+	// 原来的配方没有被 WithWarp 改动（值接收者）。
+	if base.Warp != nil {
+		t.Fatalf("WithWarp modified its receiver")
 	}
 }
