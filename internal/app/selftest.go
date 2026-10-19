@@ -102,6 +102,7 @@ func NewSelftest(a *App, out string) *Selftest {
 	var zoom0, panX0, panY0 float32
 	var shiftIn0, shiftOut0 float32
 	var rois0, strokes0 int
+	var alignCfg0 core.AlignConfig
 	s.steps = []selftestStep{
 		{name: "load"},
 		{name: "light-dark-zh", enter: func(a *App) { a.theme = ThemeDark; SetLang(LangZh); tab("light")(a) }, shot: "native-light-dark-zh.png"},
@@ -234,6 +235,152 @@ func NewSelftest(a *App, out string) *Selftest {
 				return nil, fmt.Errorf("align-overlay: unwarped input judged %s (%s), truth %s", ap.report.Level, judge, truthLevel)
 			}
 			return map[string]any{"view": ap.viewKind, "verdict": string(ap.report.Level), "truthMaxPx": ap.truth.MaxErrorPx}, nil
+		}},
+		// A slight shift must be aligned by the machine ROIs: P7-style ROIs sit flush in the image
+		// corner, so their true window leaves the image and only the overlap rule keeps them matchable.
+		{name: "align-slight", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.params = defaultWarpParams()
+			setWarpGeometry(&ap.params, warpPresetByID("slight"))
+			ap.dirty = true
+			ap.requestRun(true)
+		}, shot: "native-align-slight.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil || ap.truth == nil || ap.report.Fit == nil || len(ap.diag) != len(ap.report.Matches) {
+				return nil, fmt.Errorf("align-slight: no report, truth, fit or diagnosis")
+			}
+			if ap.reportStale() {
+				return nil, fmt.Errorf("align-slight: the fresh report is shown as stale")
+			}
+			tp := core.TruthPose(&ap.reportParams, ap.reportW, ap.reportH)
+			fp := core.FitPose(*ap.report.Fit, ap.reportW, ap.reportH)
+			if math.Abs(fp.ShiftX-tp.ShiftX) > 0.8 || math.Abs(fp.ShiftY-tp.ShiftY) > 0.8 || math.Abs(fp.ThetaDeg-tp.ThetaDeg) > 0.1 {
+				return nil, fmt.Errorf("align-slight: measured pose %+v is far from the set pose %+v", fp, tp)
+			}
+			truthLevel := core.TruthLevel(ap.truth.MaxErrorPx, ap.reportConfig)
+			judge := core.JudgeAgainstTruth(ap.report.Level, truthLevel)
+			if ap.report.Level != core.VerdictOK || judge != core.JudgeCorrect {
+				return nil, fmt.Errorf("align-slight: a slight shift was judged %s (%s, reasons %+v), truth %s, max truth error %.3f px",
+					ap.report.Level, judge, ap.report.Reasons, truthLevel, ap.truth.MaxErrorPx)
+			}
+			outside, worst := 0, 0.0
+			for i, d := range ap.diag {
+				if d.InsideShare < 1 {
+					outside++
+				}
+				if i < len(ap.truth.PerRoiErrorPx) && !math.IsNaN(d.MatchErrPx) && d.MatchErrPx > worst {
+					worst = d.MatchErrPx
+				}
+			}
+			return map[string]any{
+				"verdict": string(ap.report.Level), "judgement": string(judge), "truthMaxPx": ap.truth.MaxErrorPx,
+				"roisLeavingTheImage": outside, "worstMatchErrPx": worst,
+			}, nil
+		}},
+		// The aligned views show the input brought onto the template with the fit the algorithm found
+		// itself (never the set warp) and measure what is still left over on the whole picture.
+		{name: "align-aligned", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.viewKind = "alignedOverlay"
+			ap.requestView()
+		}, shot: "native-align-aligned.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			al := ap.alignedNow()
+			if al == nil || ap.report == nil || ap.report.Fit == nil {
+				return nil, fmt.Errorf("align-aligned: no aligned image after a finished run")
+			}
+			if al.fit != *ap.report.Fit {
+				return nil, fmt.Errorf("align-aligned: realigned with %+v, not with the fit of the report %+v", al.fit, *ap.report.Fit)
+			}
+			if truth := core.WarpToSimilarity(&ap.reportParams, ap.reportW, ap.reportH); al.fit == truth {
+				return nil, fmt.Errorf("align-aligned: the aligned image was made with the true warp")
+			}
+			if !(al.after < al.before/3) {
+				return nil, fmt.Errorf("align-aligned: mean grey difference %.2f -> %.2f, want at least a three-fold drop", al.before, al.after)
+			}
+			c := al.check
+			if c.Windows < 8 {
+				return nil, fmt.Errorf("align-aligned: only %d of %d check windows found again", c.Windows, c.Total)
+			}
+			// A slight shift is a pure similarity, so what the fit leaves over is its own error.
+			if c.MaxPx > 2*ap.reportConfig.OkResidualPx {
+				return nil, fmt.Errorf("align-aligned: %.2f px still left over (max), more than twice the OK threshold %.2f", c.MaxPx, ap.reportConfig.OkResidualPx)
+			}
+			pix := packAlignView("alignedOverlay", ap.template, ap.input, al)
+			defer PutRGBA(pix)
+			i := len(ap.template.Data) / 2
+			if pix[4*i] != ap.template.Data[i] || pix[4*i+1] != al.re.Image.Data[i] || pix[4*i+2] != al.re.Image.Data[i] {
+				return nil, fmt.Errorf("align-aligned: overlay pixel %d is %v", i, pix[4*i:4*i+3])
+			}
+			return map[string]any{
+				"greyDiffBefore": al.before, "greyDiffAfter": al.after,
+				"checkWindows": c.Windows, "checkTotal": c.Total, "leftoverMaxWorkingPx": c.MaxPx, "leftoverRmsWorkingPx": c.RmsPx,
+			}, nil
+		}},
+		// Zoomed in on the window that is still furthest off, where the leftover can be seen.
+		{name: "align-aligned-zoom", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			if al := ap.alignedNow(); al != nil && al.check.Windows > 0 {
+				a.Viewer.ZoomOn(al.check.Worst.X, al.check.Worst.Y, 4)
+			}
+		}, shot: "native-align-aligned-zoom.png", check: func(s *Selftest) (map[string]any, error) {
+			if z := s.a.Viewer.Zoom(); z < 3.9 || z > 4.1 {
+				return nil, fmt.Errorf("align-aligned-zoom: zoom %.2f, want 4", z)
+			}
+			return map[string]any{"zoom": s.a.Viewer.Zoom()}, nil
+		}},
+		{name: "align-aligned-reset", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.viewKind = "overlay"
+			ap.requestView()
+			a.Viewer.Fit()
+		}},
+		// The same shift with the strict matcher (MinOverlap 0, the old behaviour): a ROI whose true
+		// window leaves the image cannot be matched and must be explained, not just flagged.
+		{name: "align-border", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			alignCfg0 = ap.config
+			ap.config.MinOverlap = 0
+			ap.requestRun(true)
+		}, shot: "native-align-border.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil || len(ap.diag) != len(ap.report.Matches) {
+				return nil, fmt.Errorf("align-border: no report or diagnosis")
+			}
+			if ap.reportStale() {
+				return nil, fmt.Errorf("align-border: the fresh report is shown as stale")
+			}
+			out := -1
+			for i, d := range ap.diag {
+				if d.InsideShare < 0.99 && (out < 0 || d.OverhangPx > ap.diag[out].OverhangPx) {
+					out = i
+				}
+			}
+			if out < 0 {
+				return map[string]any{"skipped": "no ROI of this model leaves the image under the slight shift"}, nil
+			}
+			name := ap.report.Matches[out].Name
+			if ap.report.Level == core.VerdictOK {
+				return nil, fmt.Errorf("align-border: the strict matcher passed although %s leaves the image", name)
+			}
+			notes := ap.roiNotes()
+			mentioned := false
+			for _, n := range notes {
+				if strings.HasPrefix(n.text, name) && n.level != core.VerdictOK {
+					mentioned = true
+				}
+			}
+			if !mentioned {
+				return nil, fmt.Errorf("align-border: no diagnosis line for %s: %+v", name, notes)
+			}
+			return map[string]any{"roi": name, "verdict": string(ap.report.Level), "matchErrPx": ap.diag[out].MatchErrPx, "notes": len(notes)}, nil
+		}},
+		{name: "align-border-reset", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.config = alignCfg0
+			ap.params = defaultWarpParams()
+			ap.dirty = true
+			ap.requestRun(true)
 		}},
 		{name: "align-offset", enter: func(a *App) {
 			ap := s.panel("align").(*AlignPanel)
@@ -1674,6 +1821,315 @@ func NewSelftest(a *App, out string) *Selftest {
 			},
 		},
 	)
+	var tileAbsFlagged, tileAbsSRDefects int
+	s.steps = append(s.steps,
+		selftestStep{
+			name: "tile-setup", enter: func(a *App) {
+				enterDefect(a)
+				for i := 0; i < 3; i++ {
+					a.Light.Channels[i].Enable = true
+					a.Light.Channels[i].Value = 512
+				}
+				a.NotifyLightChanged()
+				dp := s.panel("defect").(*DefectPanel)
+				dp.strokes = nil
+				dp.channel = core.ChRed
+				dp.noise = core.SensorNoise{Seed: 1}
+				dp.paramsOpen = false
+				dp.resetInspect()
+				dp.learned = [3]bool{}
+				dp.renderRev++
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil || !dp.learned[core.ChRed] {
+					return nil, fmt.Errorf("tile-setup: report or learned flag missing")
+				}
+				rep := dp.lastReport
+				for m := 0; m < inspect.NumMaterials; m++ {
+					if rep.PerMaterial[m].Tiles != 0 {
+						return nil, fmt.Errorf("tile-setup: material %d has %d tiles with the tile rules off", m, rep.PerMaterial[m].Tiles)
+					}
+				}
+				for _, d := range rep.Defects {
+					if d.Rules != inspect.RuleInterval {
+						return nil, fmt.Errorf("tile-setup: defect rules %d, want interval only", d.Rules)
+					}
+				}
+				return map[string]any{"defects": len(rep.Defects), "flagged": rep.FlaggedPixels}, nil
+			},
+		},
+		selftestStep{
+			name: "tile-abs", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				mp := &dp.inspectParams[core.ChRed].Materials[inspect.SR]
+				mp.IntervalOff = true
+				mp.Abs = inspect.TileRule{Enabled: true, Bright: 4, Dark: 4, BrightSize: 1, DarkSize: 1}
+				mp.Size = 1
+				mp.MinArea = 1
+				dp.paramsOpen = true
+				dp.requestRun()
+			}, shot: "native-defect-tile-abs.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("tile-abs: no report")
+				}
+				rep := dp.lastReport
+				st := rep.PerMaterial[inspect.SR]
+				if st.Tiles <= 0 {
+					return nil, fmt.Errorf("tile-abs: SR tiles %d, want > 0", st.Tiles)
+				}
+				if st.TileMeanMin <= 0 {
+					return nil, fmt.Errorf("tile-abs: SR tile mean min %.2f, want > 0", st.TileMeanMin)
+				}
+				if st.TileMeanMax < st.TileMeanMin {
+					return nil, fmt.Errorf("tile-abs: SR tile mean max %.2f < min %.2f", st.TileMeanMax, st.TileMeanMin)
+				}
+				if st.Bright+st.Dark <= 0 {
+					return nil, fmt.Errorf("tile-abs: SR flagged %d bright + %d dark, want > 0", st.Bright, st.Dark)
+				}
+				if rep.PerMaterial[inspect.Metal].Tiles != 0 {
+					return nil, fmt.Errorf("tile-abs: metal has %d tiles although no tile rule is enabled", rep.PerMaterial[inspect.Metal].Tiles)
+				}
+				n := 0
+				for _, d := range rep.Defects {
+					if d.Material != inspect.SR {
+						continue
+					}
+					n++
+					if d.Rules&inspect.RuleAbsolute == 0 || d.Rules&(inspect.RuleInterval|inspect.RulePercent) != 0 {
+						return nil, fmt.Errorf("tile-abs: SR defect rules %d, want abs only", d.Rules)
+					}
+					if d.Excess <= 0 {
+						return nil, fmt.Errorf("tile-abs: SR defect excess %.2f, want > 0", d.Excess)
+					}
+				}
+				if n == 0 {
+					return nil, fmt.Errorf("tile-abs: no SR defect found")
+				}
+				tileAbsFlagged = rep.FlaggedPixels
+				tileAbsSRDefects = n
+				return map[string]any{
+					"tiles":       st.Tiles,
+					"tileMeanMin": st.TileMeanMin,
+					"tileMeanMax": st.TileMeanMax,
+					"srDefects":   n,
+					"flagged":     rep.FlaggedPixels,
+				}, nil
+			},
+		},
+		selftestStep{
+			name: "tile-pct", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				mp := &dp.inspectParams[core.ChRed].Materials[inspect.SR]
+				mp.Abs.Enabled = false
+				mp.Pct = inspect.TileRule{Enabled: true, Bright: 30, Dark: 30, BrightSize: 1, DarkSize: 1}
+				dp.paramsOpen = true
+				dp.requestRun()
+			}, shot: "native-defect-tile-pct.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("tile-pct: no report")
+				}
+				rep := dp.lastReport
+				st := rep.PerMaterial[inspect.SR]
+				if st.Tiles <= 0 {
+					return nil, fmt.Errorf("tile-pct: SR tiles %d, want > 0", st.Tiles)
+				}
+				n := 0
+				for _, d := range rep.Defects {
+					if d.Material != inspect.SR {
+						continue
+					}
+					n++
+					if d.Rules&inspect.RulePercent == 0 || d.Rules&(inspect.RuleInterval|inspect.RuleAbsolute) != 0 {
+						return nil, fmt.Errorf("tile-pct: SR defect rules %d, want pct only", d.Rules)
+					}
+				}
+				if n == 0 {
+					return nil, fmt.Errorf("tile-pct: no SR defect found")
+				}
+				return map[string]any{"tiles": st.Tiles, "srDefects": n, "flagged": rep.FlaggedPixels}, nil
+			},
+		},
+		selftestStep{
+			name: "tile-union", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				mp := &dp.inspectParams[core.ChRed].Materials[inspect.SR]
+				mp.IntervalOff = false
+				mp.Pct.Enabled = false
+				mp.Abs.Enabled = true
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("tile-union: no report")
+				}
+				rep := dp.lastReport
+				if rep.FlaggedPixels < tileAbsFlagged {
+					return nil, fmt.Errorf("tile-union: %d flagged, fewer than the %d of the abs rule alone", rep.FlaggedPixels, tileAbsFlagged)
+				}
+				absSR := 0
+				for _, d := range rep.Defects {
+					if d.Material == inspect.SR && d.Rules&inspect.RuleAbsolute != 0 {
+						absSR++
+					}
+				}
+				if absSR == 0 {
+					return nil, fmt.Errorf("tile-union: no SR defect carries the abs rule")
+				}
+				return map[string]any{"flagged": rep.FlaggedPixels, "absSRDefects": absSR, "defects": len(rep.Defects)}, nil
+			},
+		},
+		selftestStep{
+			name: "tile-size", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				mp := &dp.inspectParams[core.ChRed].Materials[inspect.SR]
+				mp.IntervalOff = true
+				mp.Abs.BrightSize = 33
+				mp.Abs.DarkSize = 33
+				dp.paramsOpen = false
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("tile-size: no report")
+				}
+				rep := dp.lastReport
+				if rep.Filtered <= 0 {
+					return nil, fmt.Errorf("tile-size: filtered %d, want > 0", rep.Filtered)
+				}
+				n := 0
+				for _, d := range rep.Defects {
+					if d.Material != inspect.SR {
+						continue
+					}
+					n++
+					if d.Area < 33 {
+						return nil, fmt.Errorf("tile-size: SR defect area %d, want >= 33", d.Area)
+					}
+				}
+				if n > tileAbsSRDefects {
+					return nil, fmt.Errorf("tile-size: %d SR defects, more than the %d with size 1", n, tileAbsSRDefects)
+				}
+				return map[string]any{"filtered": rep.Filtered, "srDefects": n, "wasSRDefects": tileAbsSRDefects}, nil
+			},
+		},
+		selftestStep{
+			name: "tile-reset", enter: func(a *App) {
+				dp := s.panel("defect").(*DefectPanel)
+				dp.resetInspect()
+				dp.learned = [3]bool{}
+				dp.paramsOpen = false
+				dp.renderRev++
+				dp.requestRun()
+			},
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.lastReport == nil {
+					return nil, fmt.Errorf("tile-reset: no report")
+				}
+				rep := dp.lastReport
+				for _, d := range rep.Defects {
+					if d.Rules != inspect.RuleInterval {
+						return nil, fmt.Errorf("tile-reset: defect rules %d, want interval only", d.Rules)
+					}
+				}
+				for m := 0; m < inspect.NumMaterials; m++ {
+					if rep.PerMaterial[m].Tiles != 0 {
+						return nil, fmt.Errorf("tile-reset: material %d has %d tiles with the default parameters", m, rep.PerMaterial[m].Tiles)
+					}
+				}
+				return map[string]any{"defects": len(rep.Defects), "flagged": rep.FlaggedPixels}, nil
+			},
+		},
+	)
+
+	var scenSaveErr error
+	var scenKey, scenText string
+	var scenIsErr bool
+	var scenWantNoise core.SensorNoise
+	var scenWantStrokes int
+	s.steps = append(s.steps,
+		selftestStep{
+			name: "studio-scenario", enter: func(a *App) {
+				tab("defect")(a)
+				dp := s.panel("defect").(*DefectPanel)
+				dp.noise = core.SensorNoise{ReadSigma: 2, ShotGain: 0.02, Seed: 5}
+				dp.radius = 19
+				if len(dp.strokes) > 0 {
+					dp.strokes[0].enabled = false
+				}
+				path := filepath.Join(s.out, "studio-scenario", snapfmt.ScenarioFile)
+				dp.studio.scen.path = path
+				dp.studio.scen.pathAuto = false
+				scenSaveErr = dp.saveScenario(path)
+				scenWantNoise = dp.noise
+				scenWantStrokes = len(dp.strokes)
+				dp.noise = core.NoNoise
+				dp.radius = 7
+				dp.strokes = nil
+				scenKey, scenText, scenIsErr = dp.loadScenario(path)
+				dp.renderRev++
+			}, shot: "native-studio-scenario.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				if scenSaveErr != nil {
+					return nil, fmt.Errorf("studio-scenario: save: %v", scenSaveErr)
+				}
+				if scenKey != "studio.scen.loaded" || scenIsErr {
+					return nil, fmt.Errorf("studio-scenario: load %q %q (err %v)", scenKey, scenText, scenIsErr)
+				}
+				dp := s.panel("defect").(*DefectPanel)
+				if dp.noise != scenWantNoise {
+					return nil, fmt.Errorf("studio-scenario: noise %+v, want %+v", dp.noise, scenWantNoise)
+				}
+				if dp.radius != 19 {
+					return nil, fmt.Errorf("studio-scenario: radius %.1f, want 19", dp.radius)
+				}
+				if len(dp.strokes) != scenWantStrokes {
+					return nil, fmt.Errorf("studio-scenario: %d strokes, want %d", len(dp.strokes), scenWantStrokes)
+				}
+				if len(dp.strokes) > 0 && dp.strokes[0].enabled {
+					return nil, fmt.Errorf("studio-scenario: the disabled stroke came back enabled")
+				}
+				path := filepath.Join(s.out, "studio-scenario", snapfmt.ScenarioFile)
+				meta, _, err := snapfmt.ReadMeta(filepath.Dir(path))
+				if err != nil {
+					return nil, fmt.Errorf("studio-scenario: read description: %v", err)
+				}
+				frames, err := localFrames(s.a.Scene, meta, core.ChRed, []string{snapfmt.KindTest, snapfmt.KindGood})
+				if err != nil {
+					return nil, fmt.Errorf("studio-scenario: render: %v", err)
+				}
+				test := frames[snapKey{ch: core.ChRed, kind: snapfmt.KindTest}]
+				if test == nil {
+					return nil, fmt.Errorf("studio-scenario: no test image")
+				}
+				if !bytes.Equal(test.Data, simulate(s.a, dp, core.ChRed).Data) {
+					return nil, fmt.Errorf("studio-scenario: the scenario test image differs from the in-process render")
+				}
+				good := frames[snapKey{ch: core.ChRed, kind: snapfmt.KindGood}]
+				if good == nil {
+					return nil, fmt.Errorf("studio-scenario: no good image")
+				}
+				light := s.a.Light.Clone()
+				wantGood := core.RenderGoodSample(s.a.Scene.Light, &light, core.ChRed, goodSampleNoise(dp.noise))
+				if !bytes.Equal(good.Data, wantGood.Data) {
+					return nil, fmt.Errorf("studio-scenario: the scenario good image differs from the in-process render")
+				}
+				size := int64(0)
+				if info, err := os.Stat(path); err == nil {
+					size = info.Size()
+				}
+				return map[string]any{"bytes": size, "strokes": len(dp.strokes)}, nil
+			},
+		},
+	)
 	var manualWant *core.GrayImage
 	var manualX, manualY int
 	s.steps = append(s.steps,
@@ -1868,6 +2324,7 @@ var studioOnlySteps = map[string]bool{
 	"studio-save":             true,
 	"studio-warp":             true,
 	"studio-warp-reset":       true,
+	"studio-scenario":         true,
 }
 
 var teachOnlySteps = map[string]bool{
@@ -1875,6 +2332,12 @@ var teachOnlySteps = map[string]bool{
 	"align-dark-zh":         true,
 	"interact-align-roi":    true,
 	"align-overlay":         true,
+	"align-slight":          true,
+	"align-aligned":         true,
+	"align-aligned-zoom":    true,
+	"align-aligned-reset":   true,
+	"align-border":          true,
+	"align-border-reset":    true,
 	"align-offset":          true,
 	"align-lift":            true,
 	"align-reset":           true,
@@ -1904,6 +2367,12 @@ var teachOnlySteps = map[string]bool{
 	"manual-load":           true,
 	"manual-load-inspect":   true,
 	"manual-restore":        true,
+	"tile-setup":            true,
+	"tile-abs":              true,
+	"tile-pct":              true,
+	"tile-union":            true,
+	"tile-size":             true,
+	"tile-reset":            true,
 }
 
 // filterSteps keeps the steps that belong to the profile, in order.

@@ -195,18 +195,18 @@ func (p *DefectPanel) requestSaveSession() {
 		work = func() (*snapfmt.Meta, error) { return saveLive(dir, cl, rev, &meta, have, w, h) }
 	} else {
 		exe := findCameraExe()
-		if exe == "" {
-			p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.noCamera", "", true
-			return
-		}
 		var meta snapfmt.Meta
 		if p.snapSrc.on && p.snapSrc.meta != nil {
 			meta = *p.snapSrc.meta
 		} else {
 			meta = p.snapMeta()
 		}
-		channels := []core.CameraChannel{core.ChRed, core.ChGreen, core.ChBlue}
-		work = func() (*snapfmt.Meta, error) { return cameraCapture(exe, &meta, dir, channels, true) }
+		if exe == "" {
+			work = func() (*snapfmt.Meta, error) { return saveLocal(dir, scene, &meta) }
+		} else {
+			channels := []core.CameraChannel{core.ChRed, core.ChGreen, core.ChBlue}
+			work = func() (*snapfmt.Meta, error) { return cameraCapture(exe, &meta, dir, channels, true) }
+		}
 	}
 	p.snapSrc.msgKey = ""
 	a.Jobs.Run("session-save", func() func() {

@@ -118,7 +118,7 @@ func frameToGray(f snapfmt.Frame) *core.GrayImage {
 // snapFetch decodes the wanted images, reading them from srcDir when the capture has
 // them and otherwise rendering them with the camera program. It runs on a job
 // goroutine and touches no panel state.
-func snapFetch(exe, srcDir string, meta *snapfmt.Meta, have map[snapKey]*core.GrayImage, workDir string, ch core.CameraChannel, wantGood bool, w, h int) (snapFetchResult, error) {
+func snapFetch(exe string, scene *Scene, srcDir string, meta *snapfmt.Meta, have map[snapKey]*core.GrayImage, workDir string, ch core.CameraChannel, wantGood bool, w, h int) (snapFetchResult, error) {
 	res := snapFetchResult{meta: meta, workDir: workDir, add: map[snapKey]*core.GrayImage{}}
 	name := snapfmt.ChannelName(ch)
 	kinds := []string{snapfmt.KindTest}
@@ -161,7 +161,27 @@ func snapFetch(exe, srcDir string, meta *snapfmt.Meta, have map[snapKey]*core.Gr
 		return res, nil
 	}
 	if exe == "" {
-		return res, fmt.Errorf("snap: camera program not found")
+		if scene == nil || meta == nil {
+			return res, fmt.Errorf("snap: camera program not found")
+		}
+		imgs, err := localFrames(scene, meta, ch, missing)
+		if err != nil {
+			return res, err
+		}
+		for _, kind := range missing {
+			key := snapKey{ch: ch, kind: kind}
+			img := imgs[key]
+			if img == nil {
+				return res, fmt.Errorf("snap: image %s-%s missing", name, kind)
+			}
+			res.add[key] = img
+			if kind == snapfmt.KindTest {
+				res.test = img
+			} else {
+				res.good = img
+			}
+		}
+		return res, nil
 	}
 	if workDir == "" {
 		dir, err := os.MkdirTemp("", "afvi-snap-")
@@ -238,10 +258,6 @@ func (p *DefectPanel) requestSnap() {
 		return
 	}
 	exe := findCameraExe()
-	if exe == "" {
-		p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.noCamera", "", true
-		return
-	}
 	meta := p.snapMeta()
 	ch := p.channel
 	needGood := !p.learned[ch] || p.relearn
@@ -253,7 +269,7 @@ func (p *DefectPanel) requestSnap() {
 				p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", err.Error(), true
 			}
 		}
-		res, err := snapFetch(exe, work, &meta, nil, work, ch, needGood, w, h)
+		res, err := snapFetch(exe, scene, work, &meta, nil, work, ch, needGood, w, h)
 		if err != nil {
 			os.RemoveAll(work)
 			return func() {
@@ -309,7 +325,7 @@ func (p *DefectPanel) requestSnapLoad(path string) {
 				p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.mismatch", meta.Model.ID, true
 			}
 		}
-		res, err := snapFetch(exe, dir, meta, nil, "", ch, needGood, w, h)
+		res, err := snapFetch(exe, scene, dir, meta, nil, "", ch, needGood, w, h)
 		if err != nil {
 			return func() {
 				p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", err.Error(), true
@@ -437,6 +453,7 @@ func (p *DefectPanel) dropSnapDirs(keep string) {
 
 // Close releases the capture's temporary folders when the program exits.
 func (p *DefectPanel) Close() {
+	p.scenarioClose()
 	p.resetSnap()
 }
 
@@ -450,7 +467,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 	Note(T("defect.snap.note"))
 	exe := findCameraExe()
 	if exe == "" {
-		Warn(T("defect.snap.noCamera"))
+		Note(T("defect.snap.noCamera"))
 	} else {
 		Note(T("defect.snap.camera", "path", exe))
 	}
@@ -473,7 +490,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 			p.setSnapOff()
 		}
 	}
-	enabled := exe != "" && !p.a.Jobs.Busy("snap")
+	enabled := !p.a.Jobs.Busy("snap")
 	if ButtonSized(T("defect.snap.button"), "snap-go", imgui.NewVec2(ButtonWidth(T("defect.snap.button")), imgui.FrameHeight()+2), enabled) {
 		p.requestSnap()
 	}
@@ -540,7 +557,7 @@ func init() {
 		"defect.section.snap":  "相机抓拍",
 		"defect.snap.note":     "用相机程序渲染的抓拍图作为测试图；检出仍只看测试图与材质图。",
 		"defect.snap.camera":   "相机程序：{path}",
-		"defect.snap.noCamera": "未找到相机程序 camera.exe，请设置 AFVI_CAMERA_EXE 或把它放在本程序旁边。",
+		"defect.snap.noCamera": "未找到相机程序 camera.exe：改在本程序内按配方渲染（与 camera.exe 逐字节一致）。",
 		"defect.snap.use":      "使用相机抓拍图",
 		"defect.snap.button":   "抓拍",
 		"defect.snap.path":     "抓拍路径",
@@ -563,7 +580,7 @@ func init() {
 		"defect.section.snap":  "Camera snap",
 		"defect.snap.note":     "Use the image rendered by the camera program as the test image; inspection still only sees the test image and the material map.",
 		"defect.snap.camera":   "Camera program: {path}",
-		"defect.snap.noCamera": "camera.exe was not found; set AFVI_CAMERA_EXE or place it next to this program.",
+		"defect.snap.noCamera": "camera.exe was not found: frames are rendered inside this program (byte-identical to camera.exe).",
 		"defect.snap.use":      "Use camera snap image",
 		"defect.snap.button":   "Snap",
 		"defect.snap.path":     "Snap path",
@@ -586,7 +603,7 @@ func init() {
 		"defect.section.snap":  "카메라 캡처",
 		"defect.snap.note":     "카메라 프로그램이 렌더링한 캡처 이미지를 테스트 이미지로 사용합니다. 검출은 여전히 테스트 이미지와 재질 맵만 봅니다.",
 		"defect.snap.camera":   "카메라 프로그램: {path}",
-		"defect.snap.noCamera": "camera.exe 를 찾을 수 없습니다. AFVI_CAMERA_EXE 를 설정하거나 이 프로그램 옆에 두세요.",
+		"defect.snap.noCamera": "camera.exe 를 찾을 수 없습니다. 이 프로그램 안에서 렌더링합니다(camera.exe 와 바이트 단위로 동일).",
 		"defect.snap.use":      "카메라 캡처 이미지 사용",
 		"defect.snap.button":   "캡처",
 		"defect.snap.path":     "캡처 경로",

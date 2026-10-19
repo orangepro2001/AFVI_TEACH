@@ -134,6 +134,49 @@ func PackOverlay(a, b *core.GrayImage) []byte {
 	return dst
 }
 
+// PackAbsDiffMasked renders |a-b| like PackAbsDiff, but a pixel whose mask entry is false (no data
+// in b) is dark blue, so that a missing border strip is not read as a large difference.
+func PackAbsDiffMasked(a, b *core.GrayImage, mask []bool) []byte {
+	n := a.Width * a.Height
+	if m := b.Width * b.Height; m < n {
+		n = m
+	}
+	if m := len(mask); m < n {
+		n = m
+	}
+	dst := GetRGBA(4 * a.Width * a.Height)
+	parallelRows(n, func(s, e int) {
+		for i := s; i < e; i++ {
+			o := 4 * i
+			if !mask[i] {
+				dst[o], dst[o+1], dst[o+2], dst[o+3] = 0, 0, 96, 255
+				continue
+			}
+			d := int(a.Data[i]) - int(b.Data[i])
+			if d < 0 {
+				d = -d
+			}
+			v := uint8(d)
+			dst[o], dst[o+1], dst[o+2], dst[o+3] = v, v, v, 255
+		}
+	})
+	return dst
+}
+
+// PackFlat fills a w x h texture with one grey level (the aligned views use it when there is no
+// alignment result to show).
+func PackFlat(w, h int, v uint8) []byte {
+	n := w * h
+	dst := GetRGBA(4 * n)
+	parallelRows(n, func(s, e int) {
+		for i := s; i < e; i++ {
+			o := 4 * i
+			dst[o], dst[o+1], dst[o+2], dst[o+3] = v, v, v, 255
+		}
+	})
+	return dst
+}
+
 // PackAbsDiff renders |a-b|, the web alignment "difference" view.
 func PackAbsDiff(a, b *core.GrayImage) []byte {
 	n := a.Width * a.Height

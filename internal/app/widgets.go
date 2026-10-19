@@ -84,6 +84,74 @@ func SliderInt(label, id string, v *int, min, max int) bool {
 	return false
 }
 
+// SliderInputF64 edits a float64 with a slider and, to its right, a small numeric field in which the value can be typed.
+func SliderInputF64(label, id string, v *float64, min, max float64, format string) bool {
+	labelColumn(label)
+	avail := imgui.ContentRegionAvail().X
+	fieldW := sc(64)
+	sliderW := avail - fieldW - imgui.CurrentStyle().ItemSpacing().X - groupInset
+	if sliderW < sc(40) {
+		sliderW = sc(40)
+	}
+	f := float32(*v)
+	imgui.SetNextItemWidth(sliderW)
+	changed := imgui.SliderFloatV("##"+id, &f, float32(min), float32(max), format, imgui.SliderFlagsAlwaysClamp)
+	ItemEdge(EdgeSunken)
+	if changed {
+		*v = float64(f)
+	}
+	imgui.SameLine()
+	imgui.SetNextItemWidth(fieldW)
+	val := *v
+	if imgui.InputDoubleV("##"+id+"-in", &val, 0, 0, format, imgui.InputTextFlagsAutoSelectAll) {
+		if val < min {
+			val = min
+		} else if val > max {
+			val = max
+		}
+		if val != *v {
+			*v = val
+			changed = true
+		}
+	}
+	ItemEdge(EdgeSunken)
+	return changed
+}
+
+// SliderInputInt edits an int the same way.
+func SliderInputInt(label, id string, v *int, min, max int) bool {
+	labelColumn(label)
+	avail := imgui.ContentRegionAvail().X
+	fieldW := sc(64)
+	sliderW := avail - fieldW - imgui.CurrentStyle().ItemSpacing().X - groupInset
+	if sliderW < sc(40) {
+		sliderW = sc(40)
+	}
+	i := int32(*v)
+	imgui.SetNextItemWidth(sliderW)
+	changed := imgui.SliderIntV("##"+id, &i, int32(min), int32(max), "%d", imgui.SliderFlagsAlwaysClamp)
+	ItemEdge(EdgeSunken)
+	if changed {
+		*v = int(i)
+	}
+	imgui.SameLine()
+	imgui.SetNextItemWidth(fieldW)
+	val := int32(*v)
+	if imgui.InputIntV("##"+id+"-in", &val, 0, 0, imgui.InputTextFlagsAutoSelectAll) {
+		if val < int32(min) {
+			val = int32(min)
+		} else if val > int32(max) {
+			val = int32(max)
+		}
+		if int(val) != *v {
+			*v = int(val)
+			changed = true
+		}
+	}
+	ItemEdge(EdgeSunken)
+	return changed
+}
+
 // InputF64 edits a float64 in a numeric field with +/- step buttons.
 func InputF64(label, id string, v *float64, step float64, format string) bool {
 	labelColumn(label)

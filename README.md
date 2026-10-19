@@ -38,13 +38,26 @@ x86_64-w64-mingw32-gcc --version
 ### 构建
 
 ```bash
-# 构建 teach-imgui、camera-gui 与 camera
+# 一键构建：检查与测试 -> teach-imgui、camera-gui、camera -> 安装包
 ./scripts/build-wsl.sh
+./scripts/build-wsl.sh --no-installer   # 只构建三个程序，不生成安装包
 ```
 
-输出为 `bin/teach-imgui.exe`、`bin/camera-gui.exe` 与 `bin/camera.exe`。
+输出为 `bin/teach-imgui.exe`、`bin/camera-gui.exe`、`bin/camera.exe`，以及 `dist/AFVI-Teach-Setup-<版本>.exe`（一键构建的最后一步，见下）。Windows 原生用 `.\scripts\build.ps1`（同样以安装包收尾，`-NoInstaller` 跳过）。
 
 详细构建说明见 [docs/BUILD.md](docs/BUILD.md)。
+
+### 安装包（setup.exe）
+
+```bash
+./scripts/build-wsl.sh                         # 一键构建已包含安装包：dist/AFVI-Teach-Setup-<版本>.exe（约 14 MB）
+./scripts/build-wsl.sh --reference reference   # 连同机台数据一起打包（默认不含）
+./scripts/package-wsl.sh --no-build            # 只重新打包 bin/ 里现有的程序
+```
+
+一个自解压安装程序（纯 Go，不需要 NSIS / Inno Setup），把教学程序、相机工作室、`camera.exe`、文档与机台配置示例装到 `%LOCALAPPDATA%\Programs\AFVI Teach`（每用户安装，不需要管理员权限），并创建开始菜单 / 桌面快捷方式、命令行入口（可选加入 PATH）和“应用和功能”里的卸载项。图形向导或 `-silent` 静默安装，`uninstall.exe` 卸载并默认保留 `afvi.toml` 与 `captures`。Windows 原生用 `scripts\package.ps1`。参数与细节见 [docs/BUILD.md](docs/BUILD.md)。
+
+推送 `v*` 的 tag（`git tag v1.0.0 && git push origin v1.0.0`）会触发 GitHub Actions（`.github/workflows/release.yml`）：在云端跑同一个一键构建脚本，并把安装包和 `SHA256SUMS.txt` 发布到对应的 GitHub Release；也可在 Actions 页手动 Run workflow 试跑（只产出 artifact）。详见 [docs/BUILD.md](docs/BUILD.md)。
 
 ### 运行（Windows 环境）
 
@@ -83,6 +96,8 @@ AFVI_TEACH/
 ├── cmd/teach-imgui/main.go   # 教学程序入口（锁定 OS 线程，调用 app.Run）
 ├── cmd/camera-gui/main.go    # 相机合成工作室入口（锁定 OS 线程，调用 app.RunStudio）
 ├── cmd/camera/main.go        # 相机模拟程序入口（纯 Go，无 cgo）
+├── cmd/setup/                # 安装程序（纯 Go：图形向导、静默安装、卸载；setup.rc 与清单）
+├── cmd/mkinstaller/main.go   # 把载荷接在 setup 外壳后面，生成安装包
 ├── internal/
 │   ├── app/                  # UI 应用（package app）
 │   │   ├── run.go            # Run() / RunStudio()：命令行参数、配置加载、字体、窗口、主循环
@@ -90,6 +105,7 @@ AFVI_TEACH/
 │   │   ├── profile.go        # Profile（教学 / 工作室）、窗口标题、DefectPanel 的检出 / 合成模式
 │   │   ├── scale.go          # SetFontPx 与 sc()：按界面字号缩放硬编码像素长度
 │   │   ├── studio_capture.go # 工作室「输出」栏与 requestSaveCapture（调用 camera.exe 写抓拍）
+│   │   ├── studio_scenario.go # 工作室「场景文件（XML）」：快照、保存 / 载入、自动保存与恢复
 │   │   ├── live.go           # 实时联机接入：-link 地址解析、启动 / 关闭、每帧 Tick
 │   │   ├── live_studio.go    # 工作室：去抖发布场景、与 camera.exe 同源的渲染器、「实时联机」分组
 │   │   ├── live_teach.go     # 教学程序：自动重连的客户端、跟随工作室、实时取图、「实时联机」分组
@@ -106,17 +122,22 @@ AFVI_TEACH/
 │   │   ├── defect_product.go # 虚拟良品与默认不良
 │   │   ├── inspect_bridge.go # 把测试图与设计材质图交给检出的唯一桥接
 │   │   ├── snap_source.go    # 相机抓拍来源（调用 camera.exe、读取抓拍文件）
+│   │   ├── snap_local.go     # 进程内渲染抓拍描述（找不到 camera.exe 时；与 camera.exe 逐字节一致）
+│   │   ├── panel_defect_rules.go # F1 窗口的小格规则控件（Offset 1 / Offset 2）
 │   │   └── selftest.go  capture_windows.go
 │   ├── core/                 # 仿真（光照模型、渲染、不良涂抹、虚拟良品、笔画几何）与测试
-│   ├── inspect/              # 检出算法：只看测试图与设计材质图，含检出参数文件（paramsio.go）、单元测试与隔离测试
+│   ├── inspect/              # 检出算法：只看测试图与设计材质图，含检出参数文件（paramsio.go）、单元测试与隔离测试；小格规则见 rules.go / tile.go
 │   ├── config/               # 机台配置包（afvi.toml，纯 Go）与测试
 │   ├── model/                # 模型扫描与加载（纯 Go，含 modeltest 合成参考树）
-│   ├── snap/                 # 抓拍文件格式（snap.json + 灰度 PNG，仅标准库与 core）
+│   ├── snap/                 # 抓拍文件格式（snap.json + 灰度 PNG，仅标准库与 core）与场景文件（scenario.xml，scenario.go / xml.go）
 │   ├── link/                 # 实时联机契约：协议、Server（工作室）、Client（教学），仅标准库与 snap
-│   └── camera/               # 相机渲染与命令行（纯 Go，无 cgo）
+│   ├── camera/               # 相机渲染与命令行（纯 Go，无 cgo）
+│   └── installer/            # 安装包载荷、解压、安装日志、卸载、PATH 编辑与文字（纯 Go，仅标准库）
 ├── configs/afvi.example.toml # 机台配置示例
-├── scripts/build-wsl.sh      # WSL2 构建脚本
-├── scripts/build.ps1         # Windows 构建脚本
+├── scripts/build-wsl.sh      # WSL2 一键构建（检查、测试、三个程序，最后生成安装包）
+├── scripts/build.ps1         # Windows 一键构建（同上，最后调用 package.ps1）
+├── scripts/package-wsl.sh    # 只生成安装包（WSL2；一键构建的最后一步）
+├── scripts/package.ps1       # 只生成安装包（Windows；一键构建的最后一步）
 ├── docs/BUILD.md             # 完整构建指南
 ├── docs/USAGE.md             # 使用说明
 ├── docs/LINK.md              # 实时联机协议与保存格式
@@ -126,6 +147,7 @@ AFVI_TEACH/
 │   ├── FM2/
 │   └── BM/
 ├── bin/                      # 构建输出（bin/teach-imgui.exe、bin/camera.exe）
+├── dist/                     # 安装包输出（dist/AFVI-Teach-Setup-<版本>.exe，已被 git 忽略）
 ├── .gitignore
 └── README.md                 # 本文件
 ```
@@ -146,6 +168,8 @@ AFVI_TEACH/
 - **选择与调参**：用悬浮面板选中已画的不良，在浮动窗口中批量调整幅度、半径、柔和度、颗粒、边缘轮廓与启用状态，并显示哪些不良已被 Inspect 检出
 - **实时联机**：工作室（服务端）与教学程序（客户端）经本机端口对等通信，工作室里的每次修改约 0.1 秒后出现在教学程序的测试图里，教学程序据此检出，全程没有图片文件；教学程序可随时「保存」当前画面（三个通道的测试图与良品图）和检出参数，下次「载入」；路径默认 `captures\<型号 id>`，两个程序相同
 - **保存检出参数**：每个通道的学习区间、尺寸、最小面积、边缘忽略、局部背景等存成 `inspect.json`（与抓拍同一文件夹，也可在 F1 窗口单独保存 / 载入），载入抓拍时自动恢复
+- **小格规则与直接输入**：除接受区间外，每个材质新增两条相对 400×400 小格平均 GV 的检出规则——Offset 1 绝对值、Offset 2 百分比，亮 / 暗各有偏移量和最小连续像素数（每材质共 8 个新参数，默认关闭，规格见 [docs/INSPECT_RULES.md](docs/INSPECT_RULES.md)）；F1 窗口里所有数值参数除了拖动滑块，也可以在旁边的输入框里直接键入
+- **场景文件（XML）**：相机工作室把光照混合、虚拟良品、噪声、错位翘起、全部缺陷笔画（含禁用 / 自动的）和界面设置存成 `scenario.xml`，自动保存、载入型号时自动恢复；教学程序不启动 `camera.exe` 也能读取并在进程内渲染（逐字节一致），格式见 [docs/SCENARIO.md](docs/SCENARIO.md)
 - **相机模拟与抓拍（Snap）**：独立的 `camera.exe`（纯 Go，无 cgo）把完美的 MEDIAN 渲染成有缺陷的"实拍"图，缺陷页可勾选"使用相机抓拍图像"后 Snap（把当前场景写成描述文件、调用 `camera.exe`、读回 PNG 并检出）或 Load（读入已有抓拍并导入其笔画与噪声）；抓拍与进程内渲染逐字节一致，检出依旧只看测试图与设计材质图
 - **多语言支持**：中文、英文、韩文
 - **主题切换**：经典浅灰 / 深色主题运行时切换（视图菜单）
@@ -184,9 +208,11 @@ AFVI_TEACH/
 - Delete：删除选中的 ROI
 - 悬浮工具面板：点选（选择/移动 ROI）与矩形框（新建 ROI / 遮挡）
 - 视图默认是**叠加图**（模板红色、扭曲后的输入青色，对不齐处出现红青色边）；也可切到模板、输入、差分。视图里每个 ROI 画出：设计位置（灰色虚线）、真值位置（青色虚线，即扭曲参数把它实际移到的地方）、对齐结果（实线，拟合变换作用到该 ROI 的位置，颜色 = 真值误差，绿 ≤ OK 阈值、黄居中、红 > NG 阈值，旁边标 Δ 像素）、匹配点（绿点定位成功、红点失败）和从真值到对齐结果的向量；偏移参数一拉，图上立刻看得到，不必先运行
+- **对齐后视图**（视图下拉的「对齐后（算法结果）」「对齐后叠加」「对齐后差异」）：把输入图按**算法自己拟合出的相似变换**重采样到模板网格（`core.RealignInput`，只用输入图和 `report.Fit`，不用设定的错位参数，也不是把扭曲还原），看对齐到底对不对。没有数据的边缘在对齐后图里是黑色、差异图里是蓝色，遮挡区不参与比较；叠加图越灰、差异图越暗说明越重合。这些视图只对产生该拟合的那张输入图有效：改了扭曲参数或遮挡后输入图重新生成，旧拟合不会套到新图上，要重新运行。判定区另有两项独立于 ROI 和真值的核对：「全图灰度差 对齐前→后」（有数据的像素上 |模板 − 图像| 的平均）与「对齐后局部残余位移 最大 / 均方根」（`core.CheckRealigned`：把模板切成约 20 个窗口，在对齐后的图里重新匹配，量出每个窗口还差多少，颜色按 OK/NG 阈值）。ROI 残差只反映 ROI 处，而相似变换由几个点拟合，离 ROI 越远误差越大，所以"判 OK 但看起来还是偏"时这一项更接近眼睛看到的；按钮「放大到最大残余处」缩放到 4 倍并定位到差得最多的窗口，视图里该窗口也画出方框和数值
 - 扭曲参数按用途分组：「错位（位置）」= 预设按钮（无 / 轻微错位 / 严重错位 / 翘起）+ tx、ty、旋转、缩放；「翘起与形变」= 翘起 X/Y（透视倾斜）、弯曲幅度与波长、剪切 X/Y；「成像（光度）」（默认折叠）= 模糊、噪声、增益、偏置、渐变
-- 右侧判定区：大号 OK / MANUAL / NG 横幅；「与真值核对」一行说明判定是否正确（判定正确 / 漏判：真值已超过 OK 阈值却判 OK / 误判：真值在 OK 阈值内却判 NG / 偏严 / 保守）；「设定 / 测得 / 差」表（中心位移 X、Y、旋转、缩放；位移差按 OK/NG 阈值着色）；残差 RMS 与阈值；各 ROI 的 NCC、唯一性、残差、真值误差（着色）与状态（内点 / 外点 / 失败原因）。所有长度都以全分辨率像素显示，阈值也按工作分辨率换算成同一单位。含剪切、翘起或弯曲时相似变换无法完全描述，真值误差里包含这部分模型误差，界面会提示
-- 参数改动后若没有重新运行，判定区顶部显示"参数已改动"提醒
+- 右侧判定区：大号 OK / MANUAL / NG 横幅；「与真值核对」一行说明判定是否正确（判定正确 / 漏判：真值已超过 OK 阈值却判 OK / 误判：真值在 OK 阈值内却判 NG / 偏严 / 保守）；「设定 / 测得 / 差」表（中心位移 X、Y、旋转、缩放；位移差按 OK/NG 阈值着色）；残差 RMS 与阈值；各 ROI 的 NCC、唯一性、残差、匹配误差（该 ROI 自己匹配到的位置与真实位置的距离）、对齐误差（整体拟合把该 ROI 放到的位置与真实位置的距离，即机器实际使用的；两列都按 OK/NG 阈值着色）与状态（内点 / 外点 / 失败原因）；外点就是匹配误差大而对齐误差小的 ROI。表下方的「逐个 ROI 诊断」借助真值说明外点或未定位的原因（真实位置的窗口伸出图像多少、被遮挡盖住多少），判定原因也点名具体的 ROI 和数值。所有长度都以全分辨率像素显示，阈值也按工作分辨率换算成同一单位。含剪切、翘起或弯曲时相似变换无法完全描述，真值误差里包含这部分模型误差，界面会提示
+- 参数改动后若没有重新运行，判定区顶部显示"参数已改动"提醒；正在计算时显示"正在重新计算"。是否过期按报告所用的输入（扭曲、遮挡、ROI、匹配参数、源图）与当前输入逐项比较，所以长时间运行（金字塔 1 约 30 s）结束时不会把运行期间的新改动当成已处理
+- 匹配参数：搜索半径、金字塔、最小 NCC、最小唯一性、**最小重叠**、RANSAC 阈值、OK/NG 残差。最小重叠（默认 0.9）：机台 ROI 贴着图像角落，图像移动后它的真实位置会伸出图像，窗口在图内的比例不低于该值时只用图内部分计算 NCC，贴边 ROI 因此也能跟上轻微错位；1 = 窗口必须完整在图内（TS 版的行为，贴边 ROI 会被截在边界上、被判外点而转人工）。金字塔 1 配大搜索半径每次要算几十秒，界面按 `core.MatchCost` 粗估并提醒
 
 **缺陷合成页（camera-gui.exe）**：
 - 错位与翘起：左侧"错位与翘起"分组（成像噪声之后）设置产品在抓拍里的位置——平移 tx/ty、旋转、缩放；翘起 X/Y（透视倾斜，一侧被压缩另一侧被拉伸）、弯曲幅度与波长、剪切；四个预设（无 / 轻微错位 / 严重错位 / 翘起）。整块产品（含缺陷）一起移动，传感器噪声在其后叠加，良品样本保持标称位置；场景摘要与"最近一次保存"显示该参数。错位生效时视图里的绘制与选择停用（缺陷位置是产品自己的坐标系，请先编辑缺陷最后再设错位）
@@ -282,10 +308,10 @@ ln -s /path/to/existing/reference ./reference
 ### 单元测试
 
 ```bash
-go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/...
+go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...
 ```
 
-配置包 16 个测试 + 核心 73 个测试 + 检出 41 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试。核心的 73 个测试 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 41 个测试 = 原有 21 个（其中 Size 测试改为连续像素数测试）+ 6 个连续像素测试 + 10 个局部背景测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性、逐材质开关）+ 4 个检出参数文件测试（往返、按名字存材质、容错读取、拒绝坏文件）；联机的 15 个测试覆盖协议往返、过期修订、渲染中发布、各类错误、合并推送、缓存失效、多客户端、服务端关闭、取消、大帧、非联机对端、协议版本不符、成帧与导入限制。渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致；检出算法（`internal/inspect`）是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
+配置包 16 个测试 + 核心 73 个测试 + 检出 41 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试 + 安装包 14 个测试（载荷往返与 StubSize、路径穿越与反斜杠拒绝、升级保留用户数据并删除过时文件、卸载只删记录的文件、占用文件时保留重试日志、日志篡改、PATH 编辑、三语文字与占位符、LANGID、只依赖标准库的隔离测试）。核心的 73 个测试 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 41 个测试 = 原有 21 个（其中 Size 测试改为连续像素数测试）+ 6 个连续像素测试 + 10 个局部背景测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性、逐材质开关）+ 4 个检出参数文件测试（往返、按名字存材质、容错读取、拒绝坏文件）；联机的 15 个测试覆盖协议往返、过期修订、渲染中发布、各类错误、合并推送、缓存失效、多客户端、服务端关闭、取消、大帧、非联机对端、协议版本不符、成帧与导入限制。渲染、涂抹、RNG 与颗粒仍与 TypeScript 版本跨语言验证一致；检出算法（`internal/inspect`）是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
 
 ### 自测
 
@@ -357,8 +383,8 @@ go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./inter
 ### 构建和测试流程
 
 1. 修改代码
-2. 在 WSL2 中运行 `./scripts/build-wsl.sh`
-3. 将生成的 `.exe` 传输到 Windows
+2. 在 WSL2 中运行 `./scripts/build-wsl.sh`（会连同安装包一起生成；只想快速出程序时加 `--no-installer`）
+3. 将生成的 `.exe`（或 `dist/AFVI-Teach-Setup-<版本>.exe`）传输到 Windows
 4. 在 Windows 上运行和测试
 
 ## 故障排除

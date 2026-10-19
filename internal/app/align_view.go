@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
@@ -11,7 +13,10 @@ import (
 
 // The align tab's views: the overlay shows the template in red and the warped input in cyan,
 // so a misalignment is visible as colour fringes without running anything.
-var alignViews = []string{"overlay", "template", "input", "diff"}
+var alignViews = []string{"overlay", "template", "input", "diff", "aligned", "alignedOverlay", "alignedDiff"}
+
+// isAlignedView reports whether a view kind shows the input after the algorithm's own alignment.
+func isAlignedView(kind string) bool { return strings.HasPrefix(kind, "aligned") }
 
 func alignViewIndex(kind string) int {
 	for i, v := range alignViews {
@@ -23,7 +28,7 @@ func alignViewIndex(kind string) int {
 }
 
 // packAlignView renders the texture of a view kind.
-func packAlignView(kind string, template, input *core.GrayImage) []byte {
+func packAlignView(kind string, template, input *core.GrayImage, al *alignedResult) []byte {
 	switch kind {
 	case "overlay":
 		return PackOverlay(template, input)
@@ -31,8 +36,79 @@ func packAlignView(kind string, template, input *core.GrayImage) []byte {
 		return PackGray(input)
 	case "diff":
 		return PackAbsDiff(template, input)
+	case "aligned", "alignedOverlay", "alignedDiff":
+		if al == nil {
+			// No alignment result for this image: a flat grey texture, the panel says why.
+			return PackFlat(template.Width, template.Height, 48)
+		}
+		switch kind {
+		case "alignedOverlay":
+			return PackOverlay(template, al.re.Image)
+		case "alignedDiff":
+			return PackAbsDiffMasked(template, al.re.Image, al.re.Valid)
+		}
+		return PackGray(al.re.Image)
 	}
 	return PackGray(template)
+}
+
+// alignedResult is the input resampled onto the template grid with the transform the algorithm
+// found (never the true warp), and how much closer to the template that brought it.
+type alignedResult struct {
+	input         *core.GrayImage // the input image it was made from
+	fit           core.Similarity
+	re            *core.Realigned
+	before, after float64 // mean |template - image| over the pixels that have data, before and after aligning
+	used          int     // number of pixels that have data (the occlusions are left out)
+	pyramid       int     // search pyramid factor of the check
+	check         core.ShiftCheck
+}
+
+// makeAligned realigns the input with the fit; the occlusions (working-resolution input
+// coordinates) are left out of the comparison because they hide the image on purpose.
+func makeAligned(template, input *core.GrayImage, fit core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
+	rects := make([]core.Rect, len(occs))
+	for i, o := range occs {
+		rects[i] = o.Rect
+	}
+	re := core.RealignInput(input, fit, rects)
+	before, used := core.MeanAbsDiff(template, input, re.Valid)
+	after, _ := core.MeanAbsDiff(template, re.Image, re.Valid)
+	return &alignedResult{
+		input: input, fit: fit, re: re, before: before, after: after, used: used,
+		pyramid: pyramid, check: core.CheckRealigned(template, re, pyramid),
+	}
+}
+
+// alignedFor returns the realigned image for input and fit, reusing cached when it was made from
+// the same input and fit; nil when there is no fit.
+func alignedFor(cached *alignedResult, template, input *core.GrayImage, fit *core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
+	if fit == nil {
+		return nil
+	}
+	if cached != nil && cached.input == input && cached.fit == *fit && cached.pyramid == pyramid {
+		return cached
+	}
+	return makeAligned(template, input, *fit, occs, pyramid)
+}
+
+// alignFit is the transform the last run found for the image that is shown now; nil when there is
+// none (no run yet, no fit, or the input was generated again after the run).
+func (p *AlignPanel) alignFit() *core.Similarity {
+	if p.report == nil || p.report.Fit == nil || p.fitInput == nil || p.fitInput != p.input {
+		return nil
+	}
+	f := *p.report.Fit
+	return &f
+}
+
+// alignedNow is the realigned image that belongs to the image and the fit shown now, or nil.
+func (p *AlignPanel) alignedNow() *alignedResult {
+	fit := p.alignFit()
+	if fit == nil || p.aligned == nil || p.aligned.input != p.input || p.aligned.fit != *fit {
+		return nil
+	}
+	return p.aligned
 }
 
 // levelColor is the text colour of a verdict level.
@@ -140,8 +216,12 @@ func (p *AlignPanel) drawVerdict() {
 	r := p.report
 	cfg := p.reportConfig
 	VerdictBanner(r.Level, T("align.banner."+string(r.Level)))
-	if p.dirty {
-		Warn(T("align.result.stale"))
+	if p.reportStale() {
+		if p.a.Jobs.Busy("align") {
+			Warn(T("align.result.running"))
+		} else {
+			Warn(T("align.result.stale"))
+		}
 	}
 	for _, reason := range r.Reasons {
 		Warn(p.reasonText(reason))
@@ -205,10 +285,32 @@ func (p *AlignPanel) drawVerdict() {
 	imgui.TextUnformatted(F(p.fullPx(r.ResidualRms), 3) + " px")
 	imgui.PopStyleColor()
 	Note(T("align.result.thresholds", "ok", F(p.fullPx(cfg.OkResidualPx), 2), "ng", F(p.fullPx(cfg.NgResidualPx), 2)))
-	KVTable("align-kv", [][2]string{
+	rows := [][2]string{
 		{T("align.result.meanNcc"), F(r.MeanNcc, 4)},
 		{T("align.result.elapsed"), F(p.elapsedMs, 1) + " ms"},
-	})
+	}
+	al := p.alignedNow()
+	if al != nil && al.used > 0 && !math.IsNaN(al.before) {
+		rows = append(rows, [2]string{T("align.gain.label"), F(al.before, 2) + " → " + F(al.after, 2)})
+	}
+	KVTable("align-kv", rows)
+	if al == nil {
+		return
+	}
+	if c := al.check; c.Windows > 0 {
+		col := levelColor(errLevel(c.MaxPx, cfg))
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(T("align.check.label") + ": ")
+		imgui.SameLine()
+		imgui.PushStyleColorVec4(imgui.ColText, col)
+		imgui.TextUnformatted(F(p.fullPx(c.MaxPx), 2) + " / " + F(p.fullPx(c.RmsPx), 2) + " px")
+		imgui.PopStyleColor()
+		Note(T("align.check.note", "n", strconv.Itoa(c.Windows), "total", strconv.Itoa(c.Total),
+			"ok", F(p.fullPx(cfg.OkResidualPx), 2)))
+	} else {
+		Note(T("align.check.none"))
+	}
+	Note(T("align.gain.note"))
 }
 
 // drawRoiResults draws the per-ROI table: correlation, residual of the fit, error against the
@@ -223,7 +325,7 @@ func (p *AlignPanel) drawRoiResults() {
 	cfg := p.reportConfig
 	headers := []string{
 		T("align.col.roi"), T("align.col.ncc"), T("align.col.uniqueness"),
-		T("align.col.residual"), T("align.col.truth"), T("align.col.status"),
+		T("align.col.residual"), T("align.col.match"), T("align.col.truth"), T("align.col.status"),
 	}
 	matches := r.Matches
 	cell := func(row, col int) (string, *imgui.Vec4) {
@@ -242,6 +344,13 @@ func (p *AlignPanel) drawRoiResults() {
 			}
 			return "—", nil
 		case 4:
+			if row < len(p.diag) && !math.IsNaN(p.diag[row].MatchErrPx) {
+				e := p.diag[row].MatchErrPx
+				c := levelColor(errLevel(e, cfg))
+				return F(p.fullPx(e), 3), &c
+			}
+			return "—", nil
+		case 5:
 			if p.truth != nil && row < len(p.truth.PerRoiErrorPx) && !math.IsNaN(p.truth.PerRoiErrorPx[row]) {
 				e := p.truth.PerRoiErrorPx[row]
 				c := levelColor(errLevel(e, cfg))
@@ -271,6 +380,100 @@ func (p *AlignPanel) drawRoiResults() {
 			a.Viewer.CenterOn(m.Expected.X, m.Expected.Y)
 		}
 	}
+	Note(T("align.col.explain"))
+	if notes := p.roiNotes(); len(notes) > 0 {
+		imgui.Spacing()
+		Note(T("align.notes.title"))
+		for _, n := range notes {
+			switch n.level {
+			case core.VerdictOK:
+				Note(n.text)
+			default:
+				wrappedColored(n.text, levelColor(n.level))
+			}
+		}
+	}
+}
+
+// roiNote is one line of the per-ROI diagnosis under the results table: NG for a ROI that was not
+// located, MANUAL for an outlier, OK for a remark about a ROI that is fine.
+type roiNote struct {
+	level core.VerdictLevel
+	text  string
+}
+
+// effectiveOverlap is the smallest share of a matching window that must lie inside the image
+// (1 means all of it, the behaviour of MinOverlap 0).
+func effectiveOverlap(cfg core.AlignConfig) float64 {
+	if cfg.MinOverlap <= 0 || cfg.MinOverlap >= 1 {
+		return 1
+	}
+	return cfg.MinOverlap
+}
+
+// pctText formats a share 0..1 as a percentage; a sliver below 1% or short of 100% keeps one
+// decimal so that it never reads "0%" or "100%".
+func pctText(v float64) string {
+	p := v * 100
+	switch {
+	case p > 0 && p < 1:
+		return F(p, 1)
+	case p > 99 && p < 100:
+		return F(math.Floor(p*10)/10, 1)
+	}
+	return F(p, 0)
+}
+
+// roiNotes explains, with the help of the ground truth, why a ROI was not located or was thrown out
+// as an outlier (window outside the image, covered by an occlusion) and remarks on ROIs that only
+// worked because the matcher accepted a partly outside window.
+func (p *AlignPanel) roiNotes() []roiNote {
+	r := p.report
+	if r == nil || len(p.diag) != len(r.Matches) {
+		return nil
+	}
+	cfg := p.reportConfig
+	pct := pctText
+	var notes []roiNote
+	for i, m := range r.Matches {
+		d := p.diag[i]
+		inlier := i < len(r.Residuals) && r.Residuals[i] >= 0
+		var causes []string
+		if d.InsideShare < 0.9995 {
+			eff := effectiveOverlap(cfg)
+			px := F(p.fullPx(d.OverhangPx), 1)
+			if d.InsideShare < eff {
+				causes = append(causes, T("align.cause.tooFarOut", "in", pct(d.InsideShare), "min", pct(eff), "px", px))
+			} else {
+				causes = append(causes, T("align.cause.overhang", "px", px, "out", pct(1-d.InsideShare), "min", pct(eff)))
+			}
+		}
+		if d.Occluded >= 0.05 {
+			causes = append(causes, T("align.cause.occluded", "pct", pct(d.Occluded)))
+		}
+		note := roiNote{level: core.VerdictOK}
+		head := ""
+		switch {
+		case !m.Located:
+			note.level = core.VerdictNG
+			head = T("align.note.missing", "name", m.Name, "why", p.matchReasonText(m.Reason), "ncc", F(m.Ncc, 3))
+		case !inlier:
+			note.level = core.VerdictManual
+			head = T("align.note.outlier", "name", m.Name, "dev", F(p.fullPx(d.FitDevPx), 1), "th", F(p.fullPx(cfg.RansacThresholdPx), 1))
+		default:
+			// A sliver of overhang does no harm; only remark on windows that lost a noticeable share.
+			if d.InsideShare >= 0.99 && d.Occluded < 0.05 {
+				continue
+			}
+			head = m.Name + T("align.colon")
+		}
+		note.text = head
+		if len(causes) > 0 {
+			note.text += " " + strings.Join(causes, T("align.sep")) + T("align.end")
+		}
+		notes = append(notes, note)
+	}
+	return notes
 }
 
 // drawAlignOverlay draws, for every ROI, where the design says it is (grey dashes), where the
@@ -331,19 +534,115 @@ func (p *AlignPanel) drawAlignOverlay(o *Overlay) {
 	p.drawAlignLegend(o)
 }
 
+// drawAlignedOverlay marks, on the realigned image, where every ROI ought to be (grey dashes, the
+// design), where the ground truth puts it once the input is brought back with the fit the
+// algorithm found (cyan dashes, joined to the design position by a line coloured by the error) and
+// where the ROI's own match lands after the same transform (dot). With a perfect alignment the
+// three coincide; the distance between them is what is still left over.
+func (p *AlignPanel) drawAlignedOverlay(o *Overlay) {
+	if p.template == nil {
+		return
+	}
+	s := float64(p.scale)
+	fit := p.alignFit()
+	var back core.Similarity
+	if fit != nil {
+		back = core.InvertSimilarity(*fit)
+	}
+	cfg := p.reportConfig
+	for i, r := range p.rois {
+		rx, ry, rw, rh := r.X/s, r.Y/s, r.W/s, r.H/s
+		th := float32(1.5)
+		if i == p.selected {
+			th = 3
+		}
+		o.DashedRect(rx, ry, rw, rh, OverlayMuted, th)
+		o.Text(rx, ry, 2, -14, OverlayMuted, r.Name)
+		if fit == nil || i >= len(p.report.Matches) {
+			continue
+		}
+		m := p.report.Matches[i]
+		centre := core.Point{X: rx + rw/2, Y: ry + rh/2}
+		truth := core.ApplySimilarity(back, core.WarpPoint(&p.reportParams, centre, p.reportW, p.reportH))
+		errPx := math.Hypot(truth.X-centre.X, truth.Y-centre.Y)
+		if p.truth != nil && i < len(p.truth.PerRoiErrorPx) && !math.IsNaN(p.truth.PerRoiErrorPx[i]) {
+			errPx = p.truth.PerRoiErrorPx[i]
+		}
+		col := levelOverlayColor(errLevel(errPx, cfg))
+		o.DashedRect(truth.X-rw/2, truth.Y-rh/2, rw, rh, OverlayROI, th)
+		o.Line(centre.X, centre.Y, truth.X, truth.Y, col, 2)
+		o.Text(rx, ry+rh, 2, 2, col, fmt.Sprintf("%s  Δ%s px", m.Name, F(p.fullPx(errPx), 2)))
+		if m.Found != nil {
+			f := core.ApplySimilarity(back, *m.Found)
+			dot := OverlayNG
+			if m.Located {
+				dot = OverlayOK
+			}
+			o.Circle(f.X, f.Y, 3/float64(o.Scale()), dot, 2)
+		}
+	}
+	if al := p.alignedNow(); al != nil && al.check.Windows > 0 {
+		// The window of the local check that is still furthest off, to zoom in on.
+		c := al.check
+		col := levelOverlayColor(errLevel(c.MaxPx, cfg))
+		half := float64(c.Win) / 2
+		o.Rect(c.Worst.X-half, c.Worst.Y-half, float64(c.Win), float64(c.Win), col, 2)
+		o.Text(c.Worst.X-half, c.Worst.Y-half, 2, -16, col, T("align.check.worst", "px", F(p.fullPx(c.MaxPx), 2)))
+	}
+	entries := []legendEntry{{OverlayMuted, T("align.legend.design")}}
+	if fit != nil {
+		entries = append(entries,
+			legendEntry{OverlayROI, T("align.legend.alignedTruth")},
+			legendEntry{OverlayNG, T("align.legend.match")},
+			legendEntry{OverlayWarn, T("align.legend.rest")},
+		)
+	}
+	drawLegend(o, entries)
+}
+
+// hoverAligned is the status-bar text of the aligned views.
+func (p *AlignPanel) hoverAligned(x, y int) string {
+	al := p.alignedNow()
+	if al == nil || p.template == nil || x < 0 || y < 0 || x >= p.template.Width || y >= p.template.Height {
+		return ""
+	}
+	i := y*p.template.Width + x
+	if !al.re.Valid[i] {
+		return T("align.view.noData")
+	}
+	t, a := int(p.template.Data[i]), int(al.re.Image.Data[i])
+	switch p.viewKind {
+	case "alignedOverlay":
+		return fmt.Sprintf("T %d  A %d", t, a)
+	case "alignedDiff":
+		d := t - a
+		if d < 0 {
+			d = -d
+		}
+		return fmt.Sprintf("GV %d", d)
+	}
+	return fmt.Sprintf("GV %d", a)
+}
+
 // drawAlignLegend explains the overlay's colours in the corner of the canvas.
 func (p *AlignPanel) drawAlignLegend(o *Overlay) {
-	type entry struct {
-		col  uint32
-		text string
-	}
-	entries := []entry{
+	drawLegend(o, []legendEntry{
 		{OverlayMuted, T("align.legend.design")},
 		{OverlayROI, T("align.legend.truth")},
 		{OverlayOK, T("align.legend.found")},
 		{OverlayNG, T("align.legend.match")},
 		{OverlayWarn, T("align.legend.shift")},
-	}
+	})
+}
+
+// legendEntry is one colour swatch with its explanation in a canvas legend.
+type legendEntry struct {
+	col  uint32
+	text string
+}
+
+// drawLegend draws a legend box in the bottom-right corner of the canvas.
+func drawLegend(o *Overlay, entries []legendEntry) {
 	var width float32
 	for _, e := range entries {
 		if tw := imgui.CalcTextSize(e.text).X; tw > width {
@@ -396,7 +695,22 @@ func init() {
 		"align.result.modelNote":  "含剪切、翘起或弯曲时，相似变换无法完全描述，真值误差里包含这部分模型误差。",
 		"align.result.thresholds": "阈值（全分辨率像素）：OK ≤ {ok}，NG > {ng}",
 		"align.section.roiResult": "各 ROI 结果",
-		"align.col.truth":         "真值误差",
+		"align.col.truth":         "对齐误差",
+		"align.col.match":         "匹配误差",
+		"align.col.explain":       "匹配误差：该 ROI 自己匹配到的位置离真实位置多远；对齐误差：整体拟合把该 ROI 放到的位置离真实位置多远（机器实际使用的）。外点就是匹配误差大而对齐误差小的 ROI。",
+		"align.notes.title":       "逐个 ROI 诊断",
+		"align.note.missing":      "{name}：未定位（{why}，NCC {ncc}）。",
+		"align.note.outlier":      "{name}：外点，匹配位置偏离整体拟合 {dev} px（阈值 {th} px）。",
+		"align.cause.overhang":    "真实位置的窗口伸出图像 {px} px（占面积 {out}%），只用图内部分匹配（最小重叠 {min}%）",
+		"align.cause.tooFarOut":   "真实位置的窗口只有 {in}% 在图内，低于最小重叠 {min}%，匹配不到真实位置，只能停在图像边缘（伸出 {px} px）",
+		"align.cause.occluded":    "窗口有 {pct}% 被遮挡盖住",
+		"align.colon":             "：",
+		"align.sep":               "；",
+		"align.end":               "。",
+		"align.detail.outlier":    "{name}（偏离拟合 {dev} px，阈值 {th} px）",
+		"align.detail.ambiguous":  "{name}（唯一性 {u}，下限 {min}）",
+		"align.detail.missing":    "{name}（{why}）",
+		"align.result.running":    "正在重新计算，下方还是上一次的结果。",
 		"align.col.status":        "状态",
 		"align.status.inlier":     "内点",
 		"align.status.outlier":    "外点",
@@ -436,7 +750,22 @@ func init() {
 		"align.result.modelNote":  "With shear, lift or bend a similarity transform cannot describe the warp completely; the truth error includes that model error.",
 		"align.result.thresholds": "Thresholds (full-resolution pixels): OK ≤ {ok}, NG > {ng}",
 		"align.section.roiResult": "Per-ROI results",
-		"align.col.truth":         "Truth error",
+		"align.col.truth":         "Align error",
+		"align.col.match":         "Match error",
+		"align.col.explain":       "Match error: how far the position this ROI matched on its own is from the true position. Align error: how far the overall fit puts this ROI from the true position (what the machine uses). An outlier has a large match error but a small align error.",
+		"align.notes.title":       "Per-ROI diagnosis",
+		"align.note.missing":      "{name}: not located ({why}, NCC {ncc}).",
+		"align.note.outlier":      "{name}: outlier, its match is {dev} px away from the overall fit (limit {th} px).",
+		"align.cause.overhang":    "the true window sticks out of the image by {px} px ({out}% of its area); only the part inside is matched (minimum overlap {min}%)",
+		"align.cause.tooFarOut":   "only {in}% of the true window is inside the image, below the minimum overlap {min}%, so the true position cannot be matched and the match stops at the image edge (sticks out {px} px)",
+		"align.cause.occluded":    "{pct}% of the window is covered by an occlusion",
+		"align.colon":             ": ",
+		"align.sep":               "; ",
+		"align.end":               ".",
+		"align.detail.outlier":    "{name} ({dev} px off the fit, limit {th} px)",
+		"align.detail.ambiguous":  "{name} (uniqueness {u}, minimum {min})",
+		"align.detail.missing":    "{name} ({why})",
+		"align.result.running":    "Recalculating; the results below are still the previous ones.",
 		"align.col.status":        "Status",
 		"align.status.inlier":     "inlier",
 		"align.status.outlier":    "outlier",
@@ -476,7 +805,22 @@ func init() {
 		"align.result.modelNote":  "전단, 들뜸 또는 휨이 있으면 유사 변환으로 완전히 표현할 수 없어 정답 오차에 그 모델 오차가 포함됩니다.",
 		"align.result.thresholds": "임계값 (전체 해상도 픽셀): OK ≤ {ok}, NG > {ng}",
 		"align.section.roiResult": "ROI 별 결과",
-		"align.col.truth":         "정답 오차",
+		"align.col.truth":         "정렬 오차",
+		"align.col.match":         "매칭 오차",
+		"align.col.explain":       "매칭 오차: 이 ROI가 단독으로 찾은 위치가 실제 위치에서 얼마나 떨어졌는지. 정렬 오차: 전체 피팅이 이 ROI를 놓은 위치가 실제 위치에서 얼마나 떨어졌는지(기계가 실제로 쓰는 값). 아웃라이어는 매칭 오차는 크고 정렬 오차는 작은 ROI입니다.",
+		"align.notes.title":       "ROI별 진단",
+		"align.note.missing":      "{name}: 위치 확인 실패 ({why}, NCC {ncc}).",
+		"align.note.outlier":      "{name}: 아웃라이어, 매칭 위치가 전체 피팅에서 {dev} px 벗어났습니다 (한계 {th} px).",
+		"align.cause.overhang":    "실제 위치의 창이 이미지 밖으로 {px} px({out}%) 벗어나 이미지 안쪽 부분만으로 매칭합니다 (최소 겹침 {min}%)",
+		"align.cause.tooFarOut":   "실제 위치의 창은 {in}%만 이미지 안에 있어 최소 겹침 {min}% 미만이므로 실제 위치를 찾지 못하고 이미지 가장자리에서 멈춥니다 ({px} px 벗어남)",
+		"align.cause.occluded":    "창의 {pct}%가 가림으로 덮여 있습니다",
+		"align.colon":             ": ",
+		"align.sep":               "; ",
+		"align.end":               ".",
+		"align.detail.outlier":    "{name} (피팅에서 {dev} px, 한계 {th} px)",
+		"align.detail.ambiguous":  "{name} (고유성 {u}, 최소 {min})",
+		"align.detail.missing":    "{name} ({why})",
+		"align.result.running":    "다시 계산 중입니다. 아래는 이전 결과입니다.",
 		"align.col.status":        "상태",
 		"align.status.inlier":     "인라이어",
 		"align.status.outlier":    "아웃라이어",
@@ -485,5 +829,73 @@ func init() {
 		"align.legend.found":      "정렬 결과 (피팅, 색 = 정답 오차)",
 		"align.legend.match":      "매칭 점 (초록 = 위치 확인, 빨강 = 실패)",
 		"align.legend.shift":      "실제 이동",
+	})
+}
+
+func init() {
+	Messages(map[string]string{
+		"align.match.minOverlap":     "最小重叠",
+		"align.match.minOverlapNote": "匹配窗口落在图像内的最小比例。贴边的 ROI 在图像移动后真实位置会伸出图像：不低于该比例时只用图内部分匹配；1 = 必须完整在图内（旧行为）。",
+		"align.match.slow":           "按当前金字塔和搜索半径，每次运行约需 {sec} 秒（粗估）。金字塔 1 在全分辨率上逐点搜索，建议用金字塔 4。",
+	}, map[string]string{
+		"align.match.minOverlap":     "Min overlap",
+		"align.match.minOverlapNote": "Smallest share of the matching window that must lie inside the image. After the image moves, the true window of a ROI at the border sticks out: down to this share only the part inside is matched; 1 = the window must be completely inside (the old behaviour).",
+		"align.match.slow":           "With this pyramid and search radius one run takes about {sec} s (rough estimate). Pyramid 1 searches every pixel at full resolution; pyramid 4 is recommended.",
+	}, map[string]string{
+		"align.match.minOverlap":     "최소 겹침",
+		"align.match.minOverlapNote": "매칭 창이 이미지 안에 있어야 하는 최소 비율입니다. 이미지가 움직이면 가장자리 ROI의 실제 위치가 이미지 밖으로 나가는데, 이 비율 이상이면 안쪽 부분만으로 매칭합니다. 1 = 창이 완전히 이미지 안에 있어야 함(예전 동작).",
+		"align.match.slow":           "현재 피라미드와 검색 반경에서는 한 번 실행에 약 {sec}초가 걸립니다(대략적 추정). 피라미드 1은 전체 해상도에서 모든 픽셀을 검색하므로 피라미드 4를 권장합니다.",
+	})
+}
+
+func init() {
+	Messages(map[string]string{
+		"align.view.aligned":        "对齐后（算法结果）",
+		"align.view.alignedOverlay": "对齐后叠加（模板红 / 对齐后青）",
+		"align.view.alignedDiff":    "对齐后差异",
+		"align.view.noFit":          "没有可用的对齐结果：先运行对齐（改了参数或遮挡后要重新运行）；定位成功的 ROI 少于 2 个时没有拟合结果。",
+		"align.view.alignedNote":    "对齐后的图：把输入图按算法自己拟合出的相似变换重采样到模板网格，没有用到设定的错位参数。没有数据的边缘是黑色（差异图中是蓝色），遮挡区不参与比较。重合越好，叠加图越接近灰色，差异图越暗。",
+		"align.view.noData":         "无数据",
+		"align.legend.alignedTruth": "真实位置（按算法的变换回正后）",
+		"align.legend.rest":         "剩余偏移（颜色=真值误差）",
+		"align.gain.label":          "全图灰度差 对齐前→后",
+		"align.check.label":         "对齐后局部残余位移 最大 / 均方根",
+		"align.check.worst":         "最大残余 {px} px",
+		"align.view.gotoWorst":      "放大到最大残余处",
+		"align.check.note":          "把模板切成 {total} 个窗口，在对齐后的图里重新找一遍（{n} 个找到），量出每个窗口还差多少。颜色按 OK/NG 阈值（OK ≤ {ok} px）。ROI 残差只看 ROI 处，这一项看整幅图。",
+		"align.check.none":          "对齐后的图里没有可用于复核的窗口（图太小、没有数据或纹理不足）。",
+		"align.gain.note":           "平均 |模板 − 图像| 灰度差，只计有数据的像素，遮挡区不计；越小越好。噪声、光照和翘起等相似变换描述不了的部分会让它降不到 0。",
+	}, map[string]string{
+		"align.view.aligned":        "Aligned (algorithm result)",
+		"align.view.alignedOverlay": "Aligned overlay (template red / aligned cyan)",
+		"align.view.alignedDiff":    "Aligned difference",
+		"align.view.noFit":          "No alignment result to show: run the alignment first (again after changing parameters or occlusions); there is no fit when fewer than 2 ROIs were located.",
+		"align.view.alignedNote":    "The aligned image is the input resampled onto the template grid with the similarity transform the algorithm fitted itself; the misalignment you set is not used. Edges without data are black (blue in the difference view) and occlusions are left out of the comparison. The better the match, the greyer the overlay and the darker the difference.",
+		"align.view.noData":         "no data",
+		"align.legend.alignedTruth": "True position (after undoing the fitted transform)",
+		"align.legend.rest":         "Remaining offset (colour = truth error)",
+		"align.gain.label":          "Whole-image grey difference, before → after",
+		"align.check.label":         "Remaining local shift after aligning, max / rms",
+		"align.check.worst":         "Largest remaining shift {px} px",
+		"align.view.gotoWorst":      "Zoom to the largest remaining shift",
+		"align.check.note":          "The template is cut into {total} windows and each is searched again in the aligned image ({n} found); this is how far each one is still off. Colour by the OK/NG thresholds (OK ≤ {ok} px). The ROI residual only looks at the ROIs, this looks at the whole picture.",
+		"align.check.none":          "The aligned image has no window to check with (too small, no data or too little texture).",
+		"align.gain.note":           "Mean |template − image| grey difference over the pixels that have data, occlusions left out; smaller is better. Noise, lighting and lift that a similarity cannot describe keep it above 0.",
+	}, map[string]string{
+		"align.view.aligned":        "정렬 후 (알고리즘 결과)",
+		"align.view.alignedOverlay": "정렬 후 오버레이 (템플릿 빨강 / 정렬 후 청록)",
+		"align.view.alignedDiff":    "정렬 후 차이",
+		"align.view.noFit":          "표시할 정렬 결과가 없습니다. 먼저 정렬을 실행하세요(파라미터나 가림을 바꾼 뒤에는 다시 실행). 위치를 확인한 ROI가 2개 미만이면 피팅이 없습니다.",
+		"align.view.alignedNote":    "정렬 후 이미지는 알고리즘이 스스로 피팅한 유사 변환으로 입력을 템플릿 격자에 리샘플링한 것이며, 설정한 어긋남 값은 쓰지 않습니다. 데이터가 없는 가장자리는 검정(차이 보기에서는 파랑)이고 가림 영역은 비교에서 제외됩니다. 잘 맞을수록 오버레이는 회색에 가깝고 차이는 어둡습니다.",
+		"align.view.noData":         "데이터 없음",
+		"align.legend.alignedTruth": "실제 위치 (피팅한 변환으로 되돌린 후)",
+		"align.legend.rest":         "남은 어긋남 (색 = 정답 오차)",
+		"align.gain.label":          "전체 이미지 밝기 차이, 정렬 전 → 후",
+		"align.check.label":         "정렬 후 국소 잔여 이동량 최대 / RMS",
+		"align.check.worst":         "가장 큰 잔여 이동량 {px} px",
+		"align.view.gotoWorst":      "가장 큰 잔여 위치로 확대",
+		"align.check.note":          "템플릿을 {total}개 창으로 나눠 정렬된 이미지에서 다시 찾고({n}개 찾음) 각 창이 아직 얼마나 벗어났는지 측정합니다. 색은 OK/NG 임계값 기준(OK ≤ {ok} px). ROI 잔차는 ROI 위치만 보지만 이 값은 이미지 전체를 봅니다.",
+		"align.check.none":          "정렬된 이미지에 확인할 수 있는 창이 없습니다(이미지가 작거나 데이터·질감이 부족).",
+		"align.gain.note":           "데이터가 있는 픽셀에 대한 평균 |템플릿 − 이미지| 밝기 차이이며 가림 영역은 제외합니다. 작을수록 좋고, 노이즈·조명·유사 변환으로 표현할 수 없는 들뜸 때문에 0까지 내려가지는 않습니다.",
 	})
 }

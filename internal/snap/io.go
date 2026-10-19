@@ -42,6 +42,14 @@ func Unmarshal(data []byte) (*Meta, error) {
 		}
 		data = plain
 	}
+	if LooksLikeXML(data) {
+		s, err := UnmarshalScenario(data)
+		if err != nil {
+			return nil, err
+		}
+		m := s.Meta()
+		return &m, nil
+	}
 	var m Meta
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("snap: json: %w", err)
@@ -56,6 +64,10 @@ func Unmarshal(data []byte) (*Meta, error) {
 func WriteMeta(path string, m *Meta) error {
 	if err := m.Validate(); err != nil {
 		return err
+	}
+	lower := strings.ToLower(path)
+	if strings.HasSuffix(lower, ".xml") || strings.HasSuffix(lower, ".xml.gz") {
+		return WriteScenario(path, ScenarioFromMeta(*m))
 	}
 	var data []byte
 	if strings.HasSuffix(path, ".gz") {
@@ -97,6 +109,12 @@ func ReadMeta(path string) (*Meta, string, error) {
 	if info.IsDir() {
 		file = filepath.Join(path, MetaFile)
 		dir = path
+		// 没有 snap.json 但有场景文件的文件夹：读场景文件（只有配方，没有图像）。
+		if _, err := os.Stat(file); err != nil {
+			if _, serr := os.Stat(filepath.Join(path, ScenarioFile)); serr == nil {
+				file = filepath.Join(path, ScenarioFile)
+			}
+		}
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {

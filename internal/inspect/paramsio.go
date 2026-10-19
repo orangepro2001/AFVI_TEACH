@@ -37,35 +37,105 @@ type ParamsFile struct {
 	Channels map[string]ChannelParams `json:"channels"`
 }
 
+// tileRuleWire 是一条小格规则在文件中的形式。
+type tileRuleWire struct {
+	Enabled    bool    `json:"enabled"`
+	Bright     float64 `json:"bright"`
+	Dark       float64 `json:"dark"`
+	BrightSize int     `json:"brightSize"`
+	DarkSize   int     `json:"darkSize"`
+}
+
+// tileRuleToWire 把 TileRule 转成文件形式。
+func tileRuleToWire(r TileRule) tileRuleWire {
+	return tileRuleWire{
+		Enabled:    r.Enabled,
+		Bright:     r.Bright,
+		Dark:       r.Dark,
+		BrightSize: r.BrightSize,
+		DarkSize:   r.DarkSize,
+	}
+}
+
+// tileRuleFromWire 把文件形式转成 TileRule。
+func tileRuleFromWire(w tileRuleWire) TileRule {
+	return TileRule{
+		Enabled:    w.Enabled,
+		Bright:     w.Bright,
+		Dark:       w.Dark,
+		BrightSize: w.BrightSize,
+		DarkSize:   w.DarkSize,
+	}
+}
+
 // materialWire 是单个材质在文件中的形式。
 type materialWire struct {
-	Enabled         bool    `json:"enabled"`
-	Low             float64 `json:"low"`
-	High            float64 `json:"high"`
-	Size            int     `json:"size"`
-	MinArea         int     `json:"minArea"`
-	LocalBackground bool    `json:"localBackground"`
+	Enabled         bool         `json:"enabled"`
+	Low             float64      `json:"low"`
+	High            float64      `json:"high"`
+	Size            int          `json:"size"`
+	MinArea         int          `json:"minArea"`
+	LocalBackground bool         `json:"localBackground"`
+	IntervalOff     bool         `json:"intervalOff"`
+	Abs             tileRuleWire `json:"abs"`
+	Pct             tileRuleWire `json:"pct"`
+}
+
+// materialToWire 把 MaterialParams 转成文件形式。
+func materialToWire(m MaterialParams) materialWire {
+	return materialWire{
+		Enabled:         m.Enabled,
+		Low:             m.Low,
+		High:            m.High,
+		Size:            m.Size,
+		MinArea:         m.MinArea,
+		LocalBackground: m.LocalBackground,
+		IntervalOff:     m.IntervalOff,
+		Abs:             tileRuleToWire(m.Abs),
+		Pct:             tileRuleToWire(m.Pct),
+	}
+}
+
+// materialFromWire 把文件形式转成 MaterialParams。
+func materialFromWire(w materialWire) MaterialParams {
+	return MaterialParams{
+		Enabled:         w.Enabled,
+		Low:             w.Low,
+		High:            w.High,
+		Size:            w.Size,
+		MinArea:         w.MinArea,
+		LocalBackground: w.LocalBackground,
+		IntervalOff:     w.IntervalOff,
+		Abs:             tileRuleFromWire(w.Abs),
+		Pct:             tileRuleFromWire(w.Pct),
+	}
 }
 
 // paramsWire 是 Params 在文件中的形式：材质按名字（base/sr/open/metal）存放。
+// Materials 用 json.RawMessage 保存，以便对每个材质以默认值为底叠加文件里的字段。
 type paramsWire struct {
-	Materials        map[string]materialWire `json:"materials"`
-	EdgeMargin       int                     `json:"edgeMargin"`
-	BackgroundRadius int                     `json:"backgroundRadius"`
+	Materials        map[string]json.RawMessage `json:"materials"`
+	EdgeMargin       int                        `json:"edgeMargin"`
+	BackgroundRadius int                        `json:"backgroundRadius"`
+	TileSize         int                        `json:"tileSize"`
+	TileSmooth       bool                       `json:"tileSmooth"`
 }
 
 // MarshalJSON 按名字写出各材质，文件不依赖材质索引的顺序。
 func (p Params) MarshalJSON() ([]byte, error) {
 	w := paramsWire{
-		Materials:        make(map[string]materialWire, NumMaterials),
+		Materials:        make(map[string]json.RawMessage, NumMaterials),
 		EdgeMargin:       p.EdgeMargin,
 		BackgroundRadius: p.BackgroundRadius,
+		TileSize:         p.TileSize,
+		TileSmooth:       p.TileSmooth,
 	}
 	for i := 0; i < NumMaterials; i++ {
-		m := p.Materials[i]
-		w.Materials[Material(i).String()] = materialWire{
-			Enabled: m.Enabled, Low: m.Low, High: m.High, Size: m.Size, MinArea: m.MinArea, LocalBackground: m.LocalBackground,
+		data, err := json.Marshal(materialToWire(p.Materials[i]))
+		if err != nil {
+			return nil, err
 		}
+		w.Materials[Material(i).String()] = json.RawMessage(data)
 	}
 	return json.Marshal(w)
 }
@@ -73,21 +143,32 @@ func (p Params) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON 以 DefaultParams 为底读取：文件里缺少的材质或字段保持库默认值，
 // 未知字段被忽略。结果是否合法由 Validate 判断。
 func (p *Params) UnmarshalJSON(data []byte) error {
-	w := paramsWire{EdgeMargin: DefaultParams().EdgeMargin, BackgroundRadius: DefaultParams().BackgroundRadius}
+	def := DefaultParams()
+	w := paramsWire{
+		EdgeMargin:       def.EdgeMargin,
+		BackgroundRadius: def.BackgroundRadius,
+		TileSize:         def.TileSize,
+		TileSmooth:       def.TileSmooth,
+	}
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
-	out := DefaultParams()
+	out := def
 	out.EdgeMargin = w.EdgeMargin
 	out.BackgroundRadius = w.BackgroundRadius
+	out.TileSize = w.TileSize
+	out.TileSmooth = w.TileSmooth
 	for i := 0; i < NumMaterials; i++ {
-		mw, ok := w.Materials[Material(i).String()]
+		raw, ok := w.Materials[Material(i).String()]
 		if !ok {
 			continue
 		}
-		out.Materials[i] = MaterialParams{
-			Enabled: mw.Enabled, Low: mw.Low, High: mw.High, Size: mw.Size, MinArea: mw.MinArea, LocalBackground: mw.LocalBackground,
+		// 以该材质的默认值为底，叠加文件里出现的字段。
+		mw := materialToWire(def.Materials[i])
+		if err := json.Unmarshal(raw, &mw); err != nil {
+			return err
 		}
+		out.Materials[i] = materialFromWire(mw)
 	}
 	*p = out
 	return nil

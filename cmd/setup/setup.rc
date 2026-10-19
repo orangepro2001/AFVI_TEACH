@@ -1,0 +1,7 @@
+// Icon and manifest of setup.exe. scripts/package-wsl.sh and scripts/package.ps1 compile this file
+// from the repository root with windres into cmd/setup/rsrc_windows_amd64.syso.
+// Group 1 is the icon of the file and of the window; the manifest (resource type 24) keeps Windows
+// from asking for administrator rights just because the file is called "setup", switches on the
+// current common controls and makes the window DPI aware.
+1 ICON "assets/icons/teach.ico"
+1 24 "cmd/setup/setup.manifest"

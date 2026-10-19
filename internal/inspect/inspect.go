@@ -71,6 +71,12 @@ type MaterialParams struct {
 	// LocalBackground 为 true 时该材质按局部背景判断，仅当 Params.BackgroundRadius > 0 时生效；
 	// DefaultParams 为 true。
 	LocalBackground bool
+	// IntervalOff 为 true 时不使用上面的接受区间 [Low, High]（只用下面的小格规则）；零值 false = 区间检出开启，
+	// 因此旧代码和旧文件的行为不变。
+	IntervalOff bool
+	// Abs 是 Offset 1：相对小格平均的绝对 GV 偏差规则；Pct 是 Offset 2：相对小格平均的百分比偏差规则。
+	// 两者与区间规则各自判定、各自过滤 Size，被接受的像素取并集后再分组报告。
+	Abs, Pct TileRule
 }
 
 // Params 是全部材质的检查参数。
@@ -84,6 +90,12 @@ type Params struct {
 	// （半径 r 的 (2r+1)^2 窗口）比较，区间作用于扣除局部背景后的值；
 	// LocalBackground 为 false 的材质仍使用原始全局区间。
 	BackgroundRadius int
+	// TileSize 是小格规则（MaterialParams.Abs / Pct）的小格边长（像素，MinTileSize..MaxTileSize）；
+	// 0 表示 DefaultTileSize（400）。
+	TileSize int
+	// TileSmooth 为 true 时，小格平均不是逐格取常数，而是在相邻小格中心之间做双线性插值，
+	// 消除小格边界处因亮度渐变产生的台阶；false = 严格的"本格平均"。
+	TileSmooth bool
 }
 
 // Polarity 表示缺陷极性。
@@ -102,9 +114,10 @@ type Defect struct {
 	Area                 int // 连通块中被标记的像素数
 	BBox                 Rect
 	CentroidX, CentroidY float64
-	PeakGV               uint8   // 区间外最远的被标记像素的 GV
-	Excess               float64 // 该像素超出区间的距离（亮：v-High，暗：Low-v）
+	PeakGV               uint8   // 超出判定线最远的被标记像素的 GV
+	Excess               float64 // 该像素超出判定线的距离（GV；区间规则：亮 v-High，暗 Low-v；小格规则：相对各自的判定线）
 	MeanGV               float64 // 被标记像素的平均 GV（仅用于显示）
+	Rules                uint8   // 检出该缺陷的规则位（RuleInterval | RuleAbsolute | RulePercent）
 }
 
 // MaterialStats 是单个材质的统计信息。
@@ -115,6 +128,9 @@ type MaterialStats struct {
 	Mean, Std    float64
 	Min, Max     uint8
 	Bright, Dark int // MinArea 过滤前的被标记像素数（材质关闭时为 0）
+	// 小格规则启用时（Abs 或 Pct 的任一极性起作用）：参与统计的小格数，以及这些小格平均 GV 的最小/最大值；否则为 0。
+	Tiles                    int
+	TileMeanMin, TileMeanMax float64
 }
 
 // Report 是检查结果。
@@ -138,10 +154,13 @@ func DefaultParams() Params {
 			Size:            3,
 			MinArea:         1,
 			LocalBackground: true,
+			Abs:             defaultAbsRule(),
+			Pct:             defaultPctRule(),
 		}
 	}
 	p.Materials[Metal].Enabled = true
 	p.Materials[SR].Enabled = true
+	p.TileSize = DefaultTileSize
 	return p
 }
 
@@ -153,12 +172,21 @@ func (p Params) Validate() error {
 	if p.BackgroundRadius < 0 || p.BackgroundRadius > MaxBackgroundRadius {
 		return fmt.Errorf("BackgroundRadius=%d 非法：必须在 0..%d", p.BackgroundRadius, MaxBackgroundRadius)
 	}
+	if p.TileSize != 0 && (p.TileSize < MinTileSize || p.TileSize > MaxTileSize) {
+		return fmt.Errorf("TileSize=%d 非法：必须是 0（默认 %d）或在 %d..%d", p.TileSize, DefaultTileSize, MinTileSize, MaxTileSize)
+	}
 	for i := 0; i < NumMaterials; i++ {
 		mp := p.Materials[i]
 		if !mp.Enabled {
 			continue
 		}
 		m := Material(i)
+		if err := mp.Abs.validate(m, "Abs", MaxAbsOffset); err != nil {
+			return err
+		}
+		if err := mp.Pct.validate(m, "Pct", MaxPctOffset); err != nil {
+			return err
+		}
 		if math.IsNaN(mp.Low) || math.IsNaN(mp.High) {
 			return fmt.Errorf("材质 %s：Low/High 不能为 NaN", m)
 		}
@@ -247,10 +275,21 @@ func Inspect(img Image, reg Regions, p Params) (Report, error) {
 		lb = computeBackground(img, reg, excl, p.BackgroundRadius, use)
 	}
 
+	// 小格规则（Offset 1 / Offset 2）的参考值：仅在有起作用的规则时统计。
+	var tr *tileRef
+	if anyTileRules(p) {
+		tr = buildTileRef(img, reg, excl, p.tileSize(), p.TileSmooth)
+	}
+
 	// 1. 统计遍历（并行）。局部背景只覆盖启用了它的材质，其余材质始终用全局统计。
 	accs := parallelStats(img, reg, excl)
 	for i := 0; i < NumMaterials; i++ {
 		ms := &rep.PerMaterial[i]
+		if tr != nil && tr.has[i] && tileRulesActive(p.Materials[i]) {
+			ms.Tiles = tr.tiles[i]
+			ms.TileMeanMin = tr.minMean[i]
+			ms.TileMeanMax = tr.maxMean[i]
+		}
 		if lb != nil && lb.active(i) {
 			ms.Pixels = lb.pixels(i)
 			ms.Mean = lb.mean(i)
@@ -285,8 +324,12 @@ func Inspect(img Image, reg Regions, p Params) (Report, error) {
 			mlb = lb
 		}
 		for _, pol := range []Polarity{Bright, Dark} {
-			mask := buildMask(img, reg, m, pol, mp.Low, mp.High, excl, mlb)
-			flagged := countOnes(mask)
+			rl := rulesFor(mp, pol)
+			if !rl.any() {
+				continue
+			}
+			flags := buildFlags(img, reg, m, pol, mp, rl, excl, mlb, tr)
+			flagged := countOnes(flags)
 			if flagged == 0 {
 				continue
 			}
@@ -297,9 +340,9 @@ func Inspect(img Image, reg Regions, p Params) (Report, error) {
 			}
 			rep.FlaggedPixels += flagged
 
-			defects, filtered := analyzeMask(img, mask, m, pol, mp, mlb)
-			rep.Defects = append(rep.Defects, defects...)
+			acc, filtered := acceptRules(flags, img.Width, img.Height, rl.need)
 			rep.Filtered += filtered
+			rep.Defects = append(rep.Defects, analyzeAccepted(img, acc, m, pol, mp, rl, mlb, tr)...)
 		}
 	}
 
@@ -315,105 +358,6 @@ func Inspect(img Image, reg Regions, p Params) (Report, error) {
 	})
 
 	return rep, nil
-}
-
-// analyzeMask 对一个材质、一种极性的标记掩码做 8 连通分组与统计。
-// 不膨胀、不合并：每个连通块独立判断，阈值 need = max(Size, MinArea)。
-func analyzeMask(img Image, mask []uint8, m Material, pol Polarity, mp MaterialParams, lb *localBackground) (defects []Defect, filtered int) {
-	w, h := img.Width, img.Height
-
-	need := mp.Size
-	if mp.MinArea > need {
-		need = mp.MinArea
-	}
-
-	runs, rowStart := extractRuns(mask, w, h)
-	id, count := labelRuns(runs, rowStart)
-
-	// 每个连通块的累加器。
-	type groupAcc struct {
-		area                   int
-		minX, minY, maxX, maxY int
-		sumX, sumY, sumGV      float64
-		peakGV                 uint8
-		peakExcess             float64
-		hasPeak                bool
-	}
-	groups := make([]groupAcc, count)
-	for i := range groups {
-		groups[i].minX = math.MaxInt32
-		groups[i].minY = math.MaxInt32
-		groups[i].maxX = -1
-		groups[i].maxY = -1
-	}
-
-	// 单趟遍历行程，累加到所属连通块。
-	for y := 0; y < h; y++ {
-		rowBase := y * w
-		r0, r1 := int(rowStart[y]), int(rowStart[y+1])
-		for ri := r0; ri < r1; ri++ {
-			r := runs[ri]
-			ga := &groups[id[ri]]
-			for x := int(r.x0); x <= int(r.x1); x++ {
-				v := float64(img.Pix[rowBase+x])
-				fv := v
-				if lb != nil {
-					fv = lb.value(rowBase+x, uint8(m))
-				}
-				ga.area++
-				if x < ga.minX {
-					ga.minX = x
-				}
-				if x > ga.maxX {
-					ga.maxX = x
-				}
-				if y < ga.minY {
-					ga.minY = y
-				}
-				if y > ga.maxY {
-					ga.maxY = y
-				}
-				ga.sumX += float64(x)
-				ga.sumY += float64(y)
-				ga.sumGV += v
-				var excess float64
-				if pol == Bright {
-					excess = fv - mp.High
-				} else {
-					excess = mp.Low - fv
-				}
-				if !ga.hasPeak || excess > ga.peakExcess {
-					ga.hasPeak = true
-					ga.peakExcess = excess
-					ga.peakGV = img.Pix[rowBase+x]
-				}
-			}
-		}
-	}
-
-	// 生成缺陷。
-	for gi := range groups {
-		ga := &groups[gi]
-		if ga.area == 0 {
-			continue
-		}
-		if ga.area < need {
-			filtered++
-			continue
-		}
-		defects = append(defects, Defect{
-			Material:  m,
-			Polarity:  pol,
-			Area:      ga.area,
-			BBox:      Rect{X: ga.minX, Y: ga.minY, W: ga.maxX - ga.minX + 1, H: ga.maxY - ga.minY + 1},
-			CentroidX: ga.sumX / float64(ga.area),
-			CentroidY: ga.sumY / float64(ga.area),
-			PeakGV:    ga.peakGV,
-			Excess:    ga.peakExcess,
-			MeanGV:    ga.sumGV / float64(ga.area),
-		})
-	}
-	return defects, filtered
 }
 
 // parallelStats 并行统计每个材质的像素数、和、平方和、最小/最大值。
@@ -508,66 +452,6 @@ func parallelStats(img Image, reg Regions, excl []uint8) [NumMaterials]statsAcc 
 		}
 	}
 	return accs
-}
-
-// buildMask 构建某材质某极性的标记掩码（并行）。
-// excl 非 nil 时，excl[idx] != 0 的像素被完全跳过。
-func buildMask(img Image, reg Regions, m Material, pol Polarity, low, high float64, excl []uint8, lb *localBackground) []uint8 {
-	w, h := img.Width, img.Height
-	mask := make([]uint8, w*h)
-	workers := runtime.NumCPU()
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > h {
-		workers = h
-	}
-	if workers < 1 {
-		return mask
-	}
-	rowsPer := (h + workers - 1) / workers
-	var wg sync.WaitGroup
-	for wi := 0; wi < workers; wi++ {
-		y0 := wi * rowsPer
-		y1 := y0 + rowsPer
-		if y1 > h {
-			y1 = h
-		}
-		if y0 >= y1 {
-			continue
-		}
-		wg.Add(1)
-		go func(y0, y1 int) {
-			defer wg.Done()
-			for y := y0; y < y1; y++ {
-				base := y * w
-				for x := 0; x < w; x++ {
-					idx := base + x
-					if excl != nil && excl[idx] != 0 {
-						continue
-					}
-					if reg.Material[idx] != uint8(m) {
-						continue
-					}
-					v := float64(img.Pix[idx])
-					if lb != nil {
-						v = lb.value(idx, reg.Material[idx])
-					}
-					if pol == Bright {
-						if v > high {
-							mask[idx] = 1
-						}
-					} else {
-						if v < low {
-							mask[idx] = 1
-						}
-					}
-				}
-			}
-		}(y0, y1)
-	}
-	wg.Wait()
-	return mask
 }
 
 // countOnes 统计掩码中 1 的个数。
@@ -772,6 +656,18 @@ func ProbeRect(img Image, reg Regions, p Params, rep Report, r Rect) (ProbeRepor
 		lb = computeBackground(img, reg, excl, p.BackgroundRadius, use)
 	}
 
+	var tr *tileRef
+	if anyTileRules(p) {
+		tr = buildTileRef(img, reg, excl, p.tileSize(), p.TileSmooth)
+	}
+	var rlBright, rlDark [NumMaterials]polRules
+	for i := 0; i < NumMaterials; i++ {
+		if p.Materials[i].Enabled {
+			rlBright[i] = rulesFor(p.Materials[i], Bright)
+			rlDark[i] = rulesFor(p.Materials[i], Dark)
+		}
+	}
+
 	for i := range out.PerMaterial {
 		out.PerMaterial[i].Min = 255
 		out.PerMaterial[i].Max = 0
@@ -801,9 +697,14 @@ func ProbeRect(img Image, reg Regions, p Params, rep Report, r Rect) (ProbeRepor
 				if lb != nil && lb.active(int(m)) {
 					fv = lb.value(idx, m)
 				}
-				if fv > mp.High {
+				var ref float64
+				hasRef := tr != nil && tr.has[m]
+				if hasRef {
+					ref = tr.at(x, y, m)
+				}
+				if pixelFlagged(float64(v), fv, ref, hasRef, Bright, mp, rlBright[m]) {
 					ps.Bright++
-				} else if fv < mp.Low {
+				} else if pixelFlagged(float64(v), fv, ref, hasRef, Dark, mp, rlDark[m]) {
 					ps.Dark++
 				}
 			}

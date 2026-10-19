@@ -25,16 +25,22 @@ type studioOutput struct {
 	msgKey   string        // i18n key of the last message ("" = none)
 	msgText  string        // {msg} argument of msgKey
 	msgErr   bool
+	scen     scenarioState // the scenario file (XML) section
 }
 
 // defaultCaptureDir is the default output folder: captures/<model id> next to the
-// running executable, or a relative path when the executable cannot be located.
+// running executable, or a relative path when the executable cannot be located. The
+// environment variable AFVI_CAPTURES replaces the captures folder itself (tests and
+// shared installs use it to keep captures and scenario files elsewhere).
 func defaultCaptureDir(scene *Scene) string {
 	id := "capture"
 	if scene != nil && scene.Info.ID != "" {
 		id = scene.Info.ID
 	}
 	id = strings.ReplaceAll(id, "/", "-")
+	if root := os.Getenv("AFVI_CAPTURES"); root != "" {
+		return filepath.Join(root, id)
+	}
 	if exe, err := os.Executable(); err == nil {
 		return filepath.Join(filepath.Dir(exe), "captures", id)
 	}
@@ -89,6 +95,7 @@ func (p *DefectPanel) drawOutputPanel() {
 		}
 	}
 
+	p.drawScenarioSection()
 	p.drawLiveStudio()
 
 	if Section(T("studio.section.summary"), "studio-sum") {
@@ -173,6 +180,7 @@ func (p *DefectPanel) requestSaveCapture() {
 	}
 	meta := p.snapMeta()
 	meta.Producer = studioProducer
+	scenario := p.scenarioSnapshot()
 	dir := strings.TrimSpace(p.studio.dir)
 	if dir == "" {
 		dir = defaultCaptureDir(scene)
@@ -200,7 +208,11 @@ func (p *DefectPanel) requestSaveCapture() {
 				}
 			}
 			target := filepath.Join(dir, snapfmt.MetaFile+".gz")
-			if err := snapfmt.WriteMeta(target, &meta); err != nil {
+			err := snapfmt.WriteScenario(filepath.Join(dir, snapfmt.ScenarioFile), scenario)
+			if err == nil {
+				err = snapfmt.WriteMeta(target, &meta)
+			}
+			if err != nil {
 				return func() {
 					p.studio.msgKey, p.studio.msgText, p.studio.msgErr = "studio.out.error", err.Error(), true
 					a.SetHint(T("common.error", "msg", err.Error()))
@@ -219,6 +231,9 @@ func (p *DefectPanel) requestSaveCapture() {
 			}
 		}
 		saved, err := cameraCapture(exe, &meta, dir, channels, good)
+		if err == nil {
+			err = snapfmt.WriteScenario(filepath.Join(dir, snapfmt.ScenarioFile), scenario)
+		}
 		if err != nil {
 			return func() {
 				p.studio.msgKey, p.studio.msgText, p.studio.msgErr = "studio.out.error", err.Error(), true

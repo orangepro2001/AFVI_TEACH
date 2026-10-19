@@ -24,6 +24,7 @@ type livePublisher struct {
 // Tick publishes the studio's scenario (author mode) or adopts the studio's scenario
 // (detect mode) when the live link is on.
 func (p *DefectPanel) Tick() {
+	p.tickScenario()
 	if p.a.live == nil {
 		return
 	}

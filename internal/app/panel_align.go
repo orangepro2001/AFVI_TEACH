@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"math"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
@@ -289,6 +291,13 @@ func init() {
 }
 
 // defaultWarpParams mirrors the TS initial WarpParams (Scale 1, Gain 1, rest 0).
+// matchOpsPerSecond calibrates core.MatchCost to seconds: pyramid 1 with a search radius of 230 on the
+// reference model (8e10 operations) took 34 s on a 16-thread machine. Only used for the warning below.
+const (
+	matchOpsPerSecond = 2e9
+	slowRunSeconds    = 5.0
+)
+
 func defaultWarpParams() core.WarpParams {
 	return core.WarpParams{Scale: 1, Gain: 1}
 }
@@ -301,7 +310,7 @@ type AlignPanel struct {
 	occs      []core.Occlusion
 	selected  int
 	tool      string // "none" | "roi" | "select" | "occlusion"
-	viewKind  string // "overlay" | "template" | "input" | "diff"
+	viewKind  string // "overlay" | "template" | "input" | "diff" | "aligned" | "alignedOverlay" | "alignedDiff"
 	source    string // "median" | "light"
 	scale     int
 	params    core.WarpParams
@@ -323,6 +332,10 @@ type AlignPanel struct {
 	reportParams core.WarpParams // warp (working resolution) and template size the report was computed for
 	reportW      int
 	reportH      int
+	reportKey    alignKey            // everything the report was computed from; stale when it differs from inputKey()
+	diag         []core.RoiDiagnosis // per ROI: match error, deviation from the fit, border overhang, occlusion
+	fitInput     *core.GrayImage     // the input image the report's fit was computed for; alignFit is nil once input differs
+	aligned      *alignedResult      // the input brought onto the template grid with report.Fit
 
 	dragging  bool
 	dragStart core.Point
@@ -447,6 +460,40 @@ func (p *AlignPanel) scaledRois() []core.AlignRoi {
 	return out
 }
 
+// alignKey is everything a report depends on. A report is stale when the panel's current inputs
+// differ from the ones it was computed from; a finished job must never mark newer edits clean.
+type alignKey struct {
+	params core.WarpParams
+	occs   []core.Occlusion
+	rois   []core.AlignRoi
+	scale  int
+	source string
+	config core.AlignConfig
+	light  core.LightSetting // only with source "light"
+}
+
+// inputKey snapshots the current inputs (the slices are copied, so it can be kept).
+func (p *AlignPanel) inputKey() alignKey {
+	k := alignKey{
+		params: p.params,
+		occs:   append([]core.Occlusion(nil), p.occs...),
+		rois:   cloneRois(p.rois),
+		scale:  p.scale,
+		source: p.source,
+		config: p.config,
+	}
+	k.params.Occlusions = nil
+	if p.source == "light" {
+		k.light = p.a.Light.Clone()
+	}
+	return k
+}
+
+// reportStale reports whether the shown report does not belong to the current inputs.
+func (p *AlignPanel) reportStale() bool {
+	return p.report != nil && !reflect.DeepEqual(p.reportKey, p.inputKey())
+}
+
 // requestRun schedules the full pipeline (warp + align + view) under key "align".
 func (p *AlignPanel) requestRun(force bool) {
 	a := p.a
@@ -470,9 +517,12 @@ func (p *AlignPanel) requestRun(force bool) {
 	ch := a.CameraChannel()
 	needWarp := p.dirty || p.template == nil || force
 	runAlign := p.autoRun || force
+	key := p.inputKey()
+	curFit, curAligned := p.alignFit(), p.aligned
+	regenerated := needWarp || template == nil
 	a.Jobs.Run("align", func() func() {
 		start := time.Now()
-		if needWarp || template == nil {
+		if regenerated {
 			var base *core.GrayImage
 			if source == "light" {
 				base = core.RenderChannel(scene.Light, &light, ch)
@@ -492,13 +542,24 @@ func (p *AlignPanel) requestRun(force bool) {
 		}
 		var report *core.AlignReport
 		var truth *core.TruthComparison
+		var diag []core.RoiDiagnosis
 		if runAlign && len(rois) >= 2 {
 			r := core.AlignWithRois(template, input, rois, config, core.Similarity{Scale: 1})
 			report = &r
 			t := core.CompareToTruth(r.Fit, &params, rois, template.Width, template.Height)
 			truth = &t
+			diag = core.DiagnoseRois(&r, rois, &params, template.Width, template.Height)
 		}
-		pix := packAlignView(viewKind, template, input)
+		// The image the alignment result produces: only from the fit this run found, or from the
+		// earlier fit while the input is still the image that fit was computed for.
+		var fit *core.Similarity
+		if report != nil {
+			fit = report.Fit
+		} else if !regenerated {
+			fit = curFit
+		}
+		aligned := alignedFor(curAligned, template, input, fit, params.Occlusions, config.PyramidFactor)
+		pix := packAlignView(viewKind, template, input, aligned)
 		elapsed := float64(time.Since(start).Microseconds()) / 1000
 		w, h := template.Width, template.Height
 		return func() {
@@ -508,10 +569,18 @@ func (p *AlignPanel) requestRun(force bool) {
 			}
 			p.template = template
 			p.input = input
-			p.dirty = false
+			p.aligned = aligned
+			// Only a job that saw the latest edits may mark the panel clean: a long run (pyramid 1)
+			// can finish after the user has already changed something.
+			if reflect.DeepEqual(key, p.inputKey()) {
+				p.dirty = false
+			}
 			if report != nil {
 				p.report = report
 				p.truth = truth
+				p.diag = diag
+				p.reportKey = key
+				p.fitInput = input
 				p.elapsedMs = elapsed
 				p.lastScale = scale
 				p.reportConfig = config
@@ -546,13 +615,23 @@ func (p *AlignPanel) requestView() {
 	viewKind := p.viewKind
 	template := p.template
 	input := p.input
+	fit, cached := p.alignFit(), p.aligned
+	occs := p.scaledParams().Occlusions
+	pyramid := p.config.PyramidFactor
 	a.Jobs.Run("align-view", func() func() {
-		pix := packAlignView(viewKind, template, input)
+		aligned := cached
+		if isAlignedView(viewKind) {
+			aligned = alignedFor(cached, template, input, fit, occs, pyramid)
+		}
+		pix := packAlignView(viewKind, template, input, aligned)
 		w, h := template.Width, template.Height
 		return func() {
 			if a.Scene != scene || p.template != template {
 				PutRGBA(pix)
 				return
+			}
+			if p.input == input && aligned != nil {
+				p.aligned = aligned
 			}
 			if p.active {
 				a.Viewer.SetImage(w, h, pix)
@@ -704,9 +783,14 @@ func (p *AlignPanel) DrawLeft() {
 		}
 		rerun = SliderF64(T("align.match.minNcc"), "align-minncc", &p.config.MinNcc, 0, 1, "%.2f") || rerun
 		rerun = SliderF64(T("align.match.minUniqueness"), "align-minuniq", &p.config.MinUniqueness, 0, 1, "%.2f") || rerun
+		rerun = SliderF64(T("align.match.minOverlap"), "align-minoverlap", &p.config.MinOverlap, 0.5, 1, "%.2f") || rerun
 		rerun = SliderF64(T("align.match.ransac"), "align-ransac", &p.config.RansacThresholdPx, 0.5, 20, "%.1f") || rerun
 		rerun = SliderF64(T("align.match.okResidual"), "align-okres", &p.config.OkResidualPx, 0.1, 10, "%.1f") || rerun
 		rerun = SliderF64(T("align.match.ngResidual"), "align-ngres", &p.config.NgResidualPx, 0.1, 20, "%.1f") || rerun
+		Note(T("align.match.minOverlapNote"))
+		if est := core.MatchCost(p.scaledRois(), p.config) / matchOpsPerSecond; est >= slowRunSeconds {
+			Warn(T("align.match.slow", "sec", F(est, 0)))
+		}
 	}
 
 	if Section(T("align.section.roi"), "align-roi") {
@@ -772,12 +856,23 @@ func (p *AlignPanel) DrawLeft() {
 		vk := alignViewIndex(p.viewKind)
 		if Combo(T("align.view"), "align-viewkind", &vk, []string{
 			T("align.view.overlay"), T("align.view.template"), T("align.view.input"), T("align.view.diff"),
+			T("align.view.aligned"), T("align.view.alignedOverlay"), T("align.view.alignedDiff"),
 		}) {
 			p.viewKind = alignViews[vk]
 			if p.dirty || p.template == nil {
 				p.requestRun(true)
 			} else {
 				p.requestView()
+			}
+		}
+		if isAlignedView(p.viewKind) {
+			if al := p.alignedNow(); al == nil {
+				Warn(T("align.view.noFit"))
+			} else {
+				Note(T("align.view.alignedNote"))
+				if al.check.Windows > 0 && Button(T("align.view.gotoWorst"), "align-goto-worst") {
+					a.Viewer.ZoomOn(al.check.Worst.X, al.check.Worst.Y, 4)
+				}
 			}
 		}
 	}
@@ -830,17 +925,50 @@ func (p *AlignPanel) reasonText(r core.AlignVerdictReason) string {
 			"rms", F(p.fullPx(p.report.ResidualRms), 3),
 			"th", F(p.fullPx(p.reportConfig.NgResidualPx), 3))
 	case "outlier":
-		return T("align.reason.outlier")
+		return p.reasonWithRois(T("align.reason.outlier"), func(i int, m core.RoiMatch) (string, bool) {
+			if !m.Located || m.Found == nil || i >= len(p.report.Residuals) || p.report.Residuals[i] >= 0 || i >= len(p.diag) {
+				return "", false
+			}
+			return T("align.detail.outlier", "name", m.Name, "dev", F(p.fullPx(p.diag[i].FitDevPx), 1),
+				"th", F(p.fullPx(p.reportConfig.RansacThresholdPx), 1)), true
+		})
 	case "ambiguous":
-		return T("align.reason.ambiguous")
+		return p.reasonWithRois(T("align.reason.ambiguous"), func(i int, m core.RoiMatch) (string, bool) {
+			if !m.Located || m.Uniqueness >= p.reportConfig.MinUniqueness {
+				return "", false
+			}
+			return T("align.detail.ambiguous", "name", m.Name, "u", F(m.Uniqueness, 3), "min", F(p.reportConfig.MinUniqueness, 2)), true
+		})
 	case "residual-warn":
 		return T("align.reason.residual-warn",
 			"rms", F(p.fullPx(p.report.ResidualRms), 3),
 			"th", F(p.fullPx(p.reportConfig.OkResidualPx), 3))
 	case "roi-missing":
-		return T("align.reason.roi-missing")
+		return p.reasonWithRois(T("align.reason.roi-missing"), func(i int, m core.RoiMatch) (string, bool) {
+			if m.Located {
+				return "", false
+			}
+			return T("align.detail.missing", "name", m.Name, "why", p.matchReasonText(m.Reason)), true
+		})
 	}
 	return r.Code
+}
+
+// reasonWithRois appends to a verdict reason the ROIs it is about, each with its numbers.
+func (p *AlignPanel) reasonWithRois(base string, detail func(i int, m core.RoiMatch) (string, bool)) string {
+	if p.report == nil {
+		return base
+	}
+	var items []string
+	for i, m := range p.report.Matches {
+		if text, ok := detail(i, m); ok {
+			items = append(items, text)
+		}
+	}
+	if len(items) == 0 {
+		return base
+	}
+	return base + T("align.colon") + strings.Join(items, T("align.sep"))
 }
 
 // matchReasonText translates a per-ROI reason code.
@@ -867,13 +995,39 @@ func (p *AlignPanel) Overlay(o *Overlay) {
 			o.Rect(r.X/s, r.Y/s, r.W/s, r.H/s, OverlayWarn, th)
 			o.Text(r.X/s, r.Y/s, 2, 12, OverlayWarn, r.Name)
 		}
+	} else if isAlignedView(p.viewKind) {
+		p.drawAlignedOverlay(o)
 	} else {
 		p.drawAlignOverlay(o)
 	}
-	// Occlusions are painted onto the warped input, so they sit at the same place in every view.
+	// Occlusions are painted onto the warped input, so they sit at the same place in every view
+	// of the input; in the aligned views they move with the input, outlined where the fit puts them.
+	aligned := isAlignedView(p.viewKind)
+	var back core.Similarity
+	fit := p.alignFit()
+	if fit != nil {
+		back = core.InvertSimilarity(*fit)
+	}
 	for _, occ := range p.occs {
-		o.FillRect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNGFill)
-		o.Rect(occ.X/s, occ.Y/s, occ.W/s, occ.H/s, OverlayNG, 1.5)
+		x, y, w, h := occ.X/s, occ.Y/s, occ.W/s, occ.H/s
+		if !aligned {
+			o.FillRect(x, y, w, h, OverlayNGFill)
+			o.Rect(x, y, w, h, OverlayNG, 1.5)
+			continue
+		}
+		if fit == nil {
+			continue
+		}
+		c := [4]core.Point{
+			core.ApplySimilarity(back, core.Point{X: x, Y: y}),
+			core.ApplySimilarity(back, core.Point{X: x + w, Y: y}),
+			core.ApplySimilarity(back, core.Point{X: x + w, Y: y + h}),
+			core.ApplySimilarity(back, core.Point{X: x, Y: y + h}),
+		}
+		for k := range c {
+			n := c[(k+1)%4]
+			o.Line(c[k].X, c[k].Y, n.X, n.Y, OverlayNG, 1.5)
+		}
 	}
 	if p.dragging {
 		o.DragBox(p.dragStart.X, p.dragStart.Y, p.dragCur.X, p.dragCur.Y, OverlayROI)
@@ -978,6 +1132,9 @@ func (p *AlignPanel) hitTest(x, y float64) int {
 }
 
 func (p *AlignPanel) Hover(x, y int) string {
+	if isAlignedView(p.viewKind) {
+		return p.hoverAligned(x, y)
+	}
 	var img *core.GrayImage
 	switch p.viewKind {
 	case "input", "diff", "overlay":

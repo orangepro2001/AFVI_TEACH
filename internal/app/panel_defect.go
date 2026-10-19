@@ -700,6 +700,7 @@ func (p *DefectPanel) ModelLoaded() {
 		p.productLenScale = 1
 	}
 	p.addAutoDefects()
+	p.scenarioModelLoaded()
 }
 
 func (p *DefectPanel) LightChanged() {
@@ -870,7 +871,7 @@ func (p *DefectPanel) requestRun() {
 			test, golden = res.test, res.golden
 		} else if snapOn {
 			var err error
-			res, err = snapFetch(exe, srcDir, snapMeta, have, workDir, ch, needLearn, scene.W, scene.H)
+			res, err = snapFetch(exe, scene, srcDir, snapMeta, have, workDir, ch, needLearn, scene.W, scene.H)
 			if err != nil {
 				return func() {
 					p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", err.Error(), true
@@ -1795,7 +1796,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	}
 	vp := imgui.MainViewport()
 	imgui.SetNextWindowPosV(imgui.NewVec2(vp.Pos().X+356, vp.Pos().Y+120), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(430), sc(560)), imgui.CondFirstUseEver)
+	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(480), sc(640)), imgui.CondFirstUseEver)
 	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings |
 		imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
@@ -1823,7 +1824,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	params := &p.inspectParams[ch]
 	Note(T("defect.insp.channel", "name", []string{"Red", "Green", "Blue"}[ch]))
 	Note(T("defect.insp.explain"))
-	SliderF64(T("defect.insp.learnK"), "insp-learnk", &p.learnK, 0.5, 12, "%.1f")
+	SliderInputF64(T("defect.insp.learnK"), "insp-learnk", &p.learnK, 0.5, 12, "%.1f")
 	if Button(T("defect.insp.relearn"), "insp-relearn") {
 		p.requestRelearn()
 		rerun = true
@@ -1844,7 +1845,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	Note(T("defect.insp.fileNote", "path", filepath.Join(p.sessionDir(), inspect.ParamsFileName)))
 	p.inspMsg.draw()
 	em := params.EdgeMargin
-	if SliderInt(T("defect.insp.edgeMargin"), "insp-edge", &em, 0, inspect.MaxEdgeMargin) {
+	if SliderInputInt(T("defect.insp.edgeMargin"), "insp-edge", &em, 0, inspect.MaxEdgeMargin) {
 		for i := range p.inspectParams {
 			p.inspectParams[i].EdgeMargin = em
 		}
@@ -1856,7 +1857,7 @@ func (p *DefectPanel) drawParamsDialog() {
 		Note(T("defect.insp.edgeIgnored", "px", fmt.Sprint(p.lastReport.EdgeIgnored)))
 	}
 	bg := params.BackgroundRadius
-	if SliderInt(T("defect.insp.bgRadius"), "insp-bg", &bg, 0, inspect.MaxBackgroundRadius) {
+	if SliderInputInt(T("defect.insp.bgRadius"), "insp-bg", &bg, 0, inspect.MaxBackgroundRadius) {
 		for i := range p.inspectParams {
 			p.inspectParams[i].BackgroundRadius = bg
 		}
@@ -1864,6 +1865,9 @@ func (p *DefectPanel) drawParamsDialog() {
 		rerun = true
 	}
 	Note(T("defect.insp.bgNote"))
+	if p.drawTileGlobal(params) {
+		rerun = true
+	}
 	order := []inspect.Material{inspect.Metal, inspect.SR, inspect.Open, inspect.Base}
 	for _, m := range order {
 		mp := &params.Materials[m]
@@ -1873,25 +1877,30 @@ func (p *DefectPanel) drawParamsDialog() {
 		if Check(T("defect.insp.enabled"), fmt.Sprintf("insp-en-%d", m), &mp.Enabled) {
 			rerun = true
 		}
-		if SliderF64(T("defect.insp.low"), fmt.Sprintf("insp-low-%d", m), &mp.Low, 0, 255, "%.0f") {
+		useInterval := !mp.IntervalOff
+		if Check(T("defect.insp.intervalOn"), fmt.Sprintf("insp-int-%d", m), &useInterval) {
+			mp.IntervalOff = !useInterval
+			rerun = true
+		}
+		if SliderInputF64(T("defect.insp.low"), fmt.Sprintf("insp-low-%d", m), &mp.Low, 0, 255, "%.0f") {
 			if mp.Low > mp.High {
 				mp.High = mp.Low
 			}
 			rerun = true
 		}
-		if SliderF64(T("defect.insp.high"), fmt.Sprintf("insp-high-%d", m), &mp.High, 0, 255, "%.0f") {
+		if SliderInputF64(T("defect.insp.high"), fmt.Sprintf("insp-high-%d", m), &mp.High, 0, 255, "%.0f") {
 			if mp.High < mp.Low {
 				mp.Low = mp.High
 			}
 			rerun = true
 		}
 		sz := mp.Size
-		if SliderInt(T("defect.insp.size"), fmt.Sprintf("insp-size-%d", m), &sz, 1, 64) {
+		if SliderInputInt(T("defect.insp.size"), fmt.Sprintf("insp-size-%d", m), &sz, 1, 64) {
 			mp.Size = sz
 			rerun = true
 		}
 		ma := mp.MinArea
-		if SliderInt(T("defect.insp.minArea"), fmt.Sprintf("insp-minarea-%d", m), &ma, 1, 2000) {
+		if SliderInputInt(T("defect.insp.minArea"), fmt.Sprintf("insp-minarea-%d", m), &ma, 1, 2000) {
 			mp.MinArea = ma
 			rerun = true
 		}
@@ -1900,6 +1909,9 @@ func (p *DefectPanel) drawParamsDialog() {
 				p.inspectParams[i].Materials[m].LocalBackground = mp.LocalBackground
 			}
 			p.learned = [3]bool{}
+			rerun = true
+		}
+		if p.drawMaterialRules(m, mp) {
 			rerun = true
 		}
 		if p.lastReport != nil {
@@ -1911,6 +1923,12 @@ func (p *DefectPanel) drawParamsDialog() {
 					"std", F(ms.Std, 1),
 					"min", fmt.Sprint(ms.Min),
 					"max", fmt.Sprint(ms.Max)))
+			}
+			if ms.Tiles > 0 {
+				Note(T("defect.insp.tileStats",
+					"tiles", fmt.Sprint(ms.Tiles),
+					"min", F(ms.TileMeanMin, 1),
+					"max", F(ms.TileMeanMax, 1)))
 			}
 		}
 	}
@@ -1981,7 +1999,7 @@ func (p *DefectPanel) DrawRight() {
 			}, -1)
 
 			headers := []string{
-				T("defect.col.material"), T("defect.col.polarity"), T("defect.col.area"), T("defect.col.size"),
+				T("defect.col.material"), T("defect.col.polarity"), T("defect.col.rule"), T("defect.col.area"), T("defect.col.size"),
 				T("defect.col.peakGv"), T("defect.col.excess"), T("defect.col.meanGv"),
 			}
 			defects := r.Defects
@@ -2000,12 +2018,14 @@ func (p *DefectPanel) DrawRight() {
 					}
 					return T("defect.polarity.dark")
 				case 2:
-					return fmt.Sprint(d.Area)
+					return ruleLabel(d.Rules)
 				case 3:
-					return fmt.Sprintf("%dx%d", d.BBox.W, d.BBox.H)
+					return fmt.Sprint(d.Area)
 				case 4:
-					return fmt.Sprint(d.PeakGV)
+					return fmt.Sprintf("%dx%d", d.BBox.W, d.BBox.H)
 				case 5:
+					return fmt.Sprint(d.PeakGV)
+				case 6:
 					return F(d.Excess, 1)
 				}
 				return F(d.MeanGV, 1)

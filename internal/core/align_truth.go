@@ -67,3 +67,75 @@ func JudgeAgainstTruth(level, truth VerdictLevel) TruthJudgement {
 	}
 	return JudgeCautious
 }
+
+// RoiDiagnosis 用真值解释一个 ROI 的匹配结果，供教学界面说明"为什么这个 ROI 不可靠"。
+// 所有长度和 AlignReport 一样是工作分辨率的像素。
+type RoiDiagnosis struct {
+	MatchErrPx  float64 // 匹配位置到真实位置的距离；没有匹配为 NaN（注意：不是整体拟合的误差）
+	FitDevPx    float64 // 匹配位置到整体拟合预测位置的距离，超过 RANSAC 阈值就是外点；没有匹配或拟合为 NaN
+	OverhangPx  float64 // 真实位置的窗口伸出图像边缘的最大距离，0 表示完整在图内
+	InsideShare float64 // 真实位置的窗口落在图像内的面积比例 0..1，和 AlignConfig.MinOverlap 比较
+	Occluded    float64 // 真实位置的窗口里被遮挡盖住的比例 0..1（只数图内部分）
+}
+
+// DiagnoseRois 对 rep 里的每个匹配（和 rois 一一对应）给出诊断。p 是真值扭曲参数，
+// 其中的 Occlusions 必须和生成输入图时用的一致（工作分辨率）。
+func DiagnoseRois(rep *AlignReport, rois []AlignRoi, p *WarpParams, width, height int) []RoiDiagnosis {
+	out := make([]RoiDiagnosis, len(rep.Matches))
+	for i, m := range rep.Matches {
+		d := RoiDiagnosis{MatchErrPx: math.NaN(), FitDevPx: math.NaN()}
+		if i < len(rois) {
+			roi := rois[i]
+			truth := WarpPoint(p, m.Template, width, height)
+			if m.Found != nil {
+				d.MatchErrPx = math.Hypot(m.Found.X-truth.X, m.Found.Y-truth.Y)
+				if rep.Fit != nil {
+					pred := ApplySimilarity(*rep.Fit, m.Template)
+					d.FitDevPx = math.Hypot(m.Found.X-pred.X, m.Found.Y-pred.Y)
+				}
+			}
+			x0, y0 := truth.X-roi.W/2, truth.Y-roi.H/2
+			x1, y1 := x0+roi.W, y0+roi.H
+			d.OverhangPx = math.Max(0, math.Max(math.Max(-x0, x1-float64(width)), math.Max(-y0, y1-float64(height))))
+			inX := math.Max(0, math.Min(x1, float64(width))-math.Max(x0, 0))
+			inY := math.Max(0, math.Min(y1, float64(height))-math.Max(y0, 0))
+			if roi.W > 0 && roi.H > 0 {
+				d.InsideShare = (inX / roi.W) * (inY / roi.H)
+			}
+			d.Occluded = occludedShare(p.Occlusions, x0, y0, x1, y1, width, height)
+		}
+		out[i] = d
+	}
+	return out
+}
+
+// occludedShare 返回窗口 [x0,x1)×[y0,y1) 落在图像内的部分里被遮挡盖住的比例。
+// 遮挡的像素范围和 ApplyWarp 一致（向外取整）。
+func occludedShare(occs []Occlusion, x0, y0, x1, y1 float64, width, height int) float64 {
+	if len(occs) == 0 {
+		return 0
+	}
+	wx0, wy0 := maxInt(int(math.Floor(x0)), 0), maxInt(int(math.Floor(y0)), 0)
+	wx1, wy1 := int(math.Ceil(x1)), int(math.Ceil(y1))
+	if wx1 > width {
+		wx1 = width
+	}
+	if wy1 > height {
+		wy1 = height
+	}
+	if wx1 <= wx0 || wy1 <= wy0 {
+		return 0
+	}
+	covered := 0
+	for y := wy0; y < wy1; y++ {
+		for x := wx0; x < wx1; x++ {
+			for _, o := range occs {
+				if x >= int(math.Floor(o.X)) && x < int(math.Ceil(o.X+o.W)) && y >= int(math.Floor(o.Y)) && y < int(math.Ceil(o.Y+o.H)) {
+					covered++
+					break
+				}
+			}
+		}
+	}
+	return float64(covered) / float64((wx1-wx0)*(wy1-wy0))
+}

@@ -1,0 +1,91 @@
+# Release - 构建 Windows 安装包并在打 tag 时发布。
+#
+# 触发：推送形如 v* 的 tag（git tag v1.0.0 && git push origin v1.0.0），
+#       或在 Actions 页手动 Run workflow（只构建并上传 artifact，不发布）。
+# 产物：dist/AFVI-Teach-Setup-<版本>.exe 与 dist/SHA256SUMS.txt。
+# 构建由 scripts/build-wsl.sh 完成（gofmt、vet、纯 Go 测试、三个 exe、安装包）。
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # 提供 x86_64-w64-mingw32-gcc/g++ 与 windres，build-wsl.sh 需要。
+      - name: Install MinGW-w64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64
+
+      # ref 名通过环境变量传入而不是插进脚本，避免 tag 名里的 shell 元字符被执行。
+      - name: Determine version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$REF_TYPE" = tag ]; then
+            v="$REF_NAME"
+          else
+            v="dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      # gofmt、vet、纯 Go 测试、三个 exe、安装包；reference/ 被 git 忽略且可能保密，
+      # 所以安装包不含机台数据；-selftest 需要 Windows 桌面窗口，CI 不运行。
+      - name: Build (checks, programs, installer)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/build-wsl.sh --version "$VERSION"
+
+      - name: Write checksums
+        run: |
+          cd dist
+          sha256sum AFVI-Teach-Setup-*.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AFVI-Teach-Setup
+          path: |
+            dist/AFVI-Teach-Setup-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/AFVI-Teach-Setup-*.exe
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

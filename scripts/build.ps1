@@ -1,10 +1,21 @@
-# build.ps1 - build, test and (optionally) self-test the native AFVI teaching app.
+# build.ps1 - One-click build on native Windows: checks, the three programs, (optionally) the
+# self-test, and the installer dist\AFVI-Teach-Setup-<version>.exe (scripts\package.ps1, which builds
+# its own windowsgui copies of the programs in dist\bin).
 # Windows PowerShell 5.1 compatible: no &&, ||, ternary or ?? operators.
+#
+#   .\scripts\build.ps1 [-Selftest] [-Out DIR] [-Offline] [-NoInstaller] [-Version V] [-Reference DIR]
+#
+#   -NoInstaller   stop after the three programs and the optional self-test
+#   -Version V     version shown by the installer (default: git describe, else "dev")
+#   -Reference DIR also ship this reference data tree in the installer (never included otherwise)
 [CmdletBinding()]
 param(
     [switch]$Selftest,
     [string]$Out = '',
-    [switch]$Offline
+    [switch]$Offline,
+    [switch]$NoInstaller,
+    [string]$Version = '',
+    [string]$Reference = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,10 +62,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- 3. config, core and inspect tests (pure Go, CGO_ENABLED has no effect) --
-Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/...'
-& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/...
+Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...'
+& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...
 if ($LASTEXITCODE -ne 0) {
-    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... failed.'
+    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... failed.'
     exit 1
 }
 
@@ -148,6 +159,22 @@ if ($Selftest) {
     Write-Host ("selftest: {0} errors, {1} screenshots" -f $errCount, $shotCount)
     if ($errCount -gt 0) {
         Write-Error 'selftest reported errors.'
+        exit 1
+    }
+}
+
+# --- 6. installer -------------------------------------------------------------
+# package.ps1 builds the programs it ships itself (windowsgui, into dist\bin), so the console
+# builds in bin\ that the self-test needs are left alone. It runs only after the checks above passed.
+if (-not $NoInstaller) {
+    Write-Host '==> installer (scripts\package.ps1)'
+    $pkg = @{}
+    if ($Offline) { $pkg['Offline'] = $true }
+    if ($Version -ne '') { $pkg['Version'] = $Version }
+    if ($Reference -ne '') { $pkg['Reference'] = $Reference }
+    & (Join-Path $PSScriptRoot 'package.ps1') @pkg
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'package.ps1 failed.'
         exit 1
     }
 }

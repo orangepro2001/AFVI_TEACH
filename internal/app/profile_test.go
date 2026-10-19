@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 func newTestApp(t *testing.T, p Profile) *App {
 	t.Helper()
 	t.Setenv("AFVI_CONFIG", "")
+	t.Setenv("AFVI_CAPTURES", t.TempDir()) // scenario autosave and captures stay out of the test binary's folder
 	root := t.TempDir()
 	if _, err := modeltest.WriteReference(root); err != nil {
 		t.Fatalf("WriteReference: %v", err)
@@ -308,8 +310,13 @@ func TestStudioSaveCapture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Errorf("recipe folder has %d entries, want 1", len(entries))
+	// The description and the scenario file that carries every studio setting.
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{snapfmt.ScenarioFile, snapfmt.MetaFile + ".gz"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("recipe folder holds %v, want %v", names, want)
 	}
 }
 

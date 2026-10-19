@@ -24,6 +24,10 @@ type AlignConfig struct {
 	OkResidualPx      float64
 	NgResidualPx      float64
 	Seed              uint32
+	// MinOverlap 是匹配窗口落在图像内的最小比例（0..1）。贴边的 ROI 在图像移动后，真实位置
+	// 的窗口会有一部分伸出图像；比例不低于 MinOverlap 的窗口只用图内那部分算 NCC。
+	// 0 或不小于 1 表示窗口必须完整落在图像内（旧行为）。
+	MinOverlap float64
 }
 
 // DefaultAlignConfig 是默认对齐配置。
@@ -37,6 +41,7 @@ var DefaultAlignConfig = AlignConfig{
 	OkResidualPx:      1.5,
 	NgResidualPx:      5,
 	Seed:              1,
+	MinOverlap:        0.9,
 }
 
 // NccSurface 是 NCC 搜索面。
@@ -59,6 +64,8 @@ type RoiMatch struct {
 	Located    bool
 	Reason     string
 	Surface    *NccSurface
+	// Overlap 是找到的位置上窗口落在图像内的比例，1 表示完整在图内；只在 Found 不为空时有意义。
+	Overlap float64
 }
 
 // VerdictLevel 是判定等级。
@@ -178,12 +185,48 @@ func extractPatch(img *GrayImage, x0, y0, w, h int) ([]float32, bool) {
 	return out, true
 }
 
-func nccAt(img *GrayImage, patch []float32, pw, ph, x0, y0 int) float64 {
-	sub, ok := extractPatch(img, x0, y0, pw, ph)
-	if !ok {
+// windowOverlap 返回 pw×ph 的窗口（左上角 x0,y0）落在图像内的部分 [ix0,ix1)×[iy0,iy1) 和它占窗口的比例。
+func windowOverlap(img *GrayImage, x0, y0, pw, ph int) (ix0, iy0, ix1, iy1 int, frac float64) {
+	ix0, iy0 = maxInt(x0, 0), maxInt(y0, 0)
+	ix1, iy1 = x0+pw, y0+ph
+	if ix1 > img.Width {
+		ix1 = img.Width
+	}
+	if iy1 > img.Height {
+		iy1 = img.Height
+	}
+	if ix1 <= ix0 || iy1 <= iy0 || pw <= 0 || ph <= 0 {
+		return ix0, iy0, ix0, iy0, 0
+	}
+	return ix0, iy0, ix1, iy1, float64((ix1-ix0)*(iy1-iy0)) / float64(pw*ph)
+}
+
+// nccAt 返回窗口 (x0,y0) 处的 NCC；窗口完整在图内时和旧行为一致。窗口只有一部分在图内时，
+// 图内比例不低于 minOverlap（0 或不小于 1 表示不允许）才只用重叠部分计算，否则返回 -2（无效）。
+func nccAt(img *GrayImage, patch []float32, pw, ph, x0, y0 int, minOverlap float64) float64 {
+	ix0, iy0, ix1, iy1, frac := windowOverlap(img, x0, y0, pw, ph)
+	if frac >= 1 {
+		sub, ok := extractPatch(img, x0, y0, pw, ph)
+		if !ok {
+			return -2
+		}
+		return Ncc(patch, sub)
+	}
+	if minOverlap <= 0 || minOverlap >= 1 || frac < minOverlap || frac == 0 {
 		return -2
 	}
-	return Ncc(patch, sub)
+	n := (ix1 - ix0) * (iy1 - iy0)
+	a := make([]float32, 0, n)
+	b := make([]float32, 0, n)
+	for y := iy0; y < iy1; y++ {
+		row := y * img.Width
+		prow := (y - y0) * pw
+		for x := ix0; x < ix1; x++ {
+			a = append(a, patch[prow+x-x0])
+			b = append(b, float32(img.Data[row+x]))
+		}
+	}
+	return Ncc(a, b)
 }
 
 // MatchRoi 在 input 中匹配单个 ROI。
@@ -276,7 +319,7 @@ func matchRoiPyramid(
 		for dx := 0; dx < sizeS; dx++ {
 			x0 := originX + dx
 			y0 := originY + dy
-			score := nccAt(inSmall, patchSmall, pwS, phS, x0, y0)
+			score := nccAt(inSmall, patchSmall, pwS, phS, x0, y0, cfg.MinOverlap)
 			values[dy*sizeS+dx] = float32(score)
 			if score > -2 {
 				anyValid = true
@@ -337,7 +380,7 @@ func matchRoiPyramid(
 		for dx := -rangeV; dx <= rangeV; dx++ {
 			x0 := fineX + dx
 			y0 := fineY + dy
-			score := nccAt(input, patch, pw, ph, x0, y0)
+			score := nccAt(input, patch, pw, ph, x0, y0, cfg.MinOverlap)
 			scoreGrid[(dy+rangeV)*gridSize+(dx+rangeV)] = score
 			if score > bestScore {
 				bestScore = score
@@ -385,7 +428,9 @@ func matchRoiPyramid(
 	found := Point{X: subX + float64(pw)/2, Y: subY + float64(ph)/2}
 	uniqueness := bestScore - second
 	located := bestScore >= cfg.MinNcc
+	_, _, _, _, overlap := windowOverlap(input, bestX, bestY, pw, ph)
 	base.Found = &found
+	base.Overlap = overlap
 	base.Ncc = bestScore
 	base.SecondNcc = second
 	base.Uniqueness = uniqueness
@@ -397,6 +442,22 @@ func matchRoiPyramid(
 	}
 	base.Surface = surface
 	return base
+}
+
+// MatchCost 粗估一次对齐要做多少次"像素乘加"：每个 ROI 在金字塔上层的 (2r+1)² 个窗口各比较
+// 一遍小块，再在细层的 (2f+3)² 个窗口各比较一遍整块。金字塔 1 加大搜索半径会慢到几十秒，
+// 界面据此提醒；ROI 尺寸和搜索半径都用工作分辨率。
+func MatchCost(rois []AlignRoi, cfg AlignConfig) float64 {
+	f := float64(maxInt(cfg.PyramidFactor, 1))
+	r := math.Ceil(cfg.SearchRadius / f)
+	windows := (2*r + 1) * (2*r + 1)
+	fine := (2*f + 3) * (2*f + 3)
+	total := 0.0
+	for _, roi := range rois {
+		area := math.Max(math.Round(roi.W), 1) * math.Max(math.Round(roi.H), 1)
+		total += windows*area/(f*f) + fine*area
+	}
+	return total
 }
 
 // FitSimilarity 最小二乘拟合相似变换。

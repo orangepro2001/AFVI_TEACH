@@ -141,6 +141,14 @@ func (v *Viewer) SetDoubleClickFit(enabled bool) { v.noDoubleClickFit = !enabled
 // CenterOn scrolls so that image point (x, y) is at the canvas center on the next frame.
 func (v *Viewer) CenterOn(x, y float64) { v.centerReq = &[2]float64{x, y} }
 
+// ZoomOn sets the zoom (screen pixels per image pixel) and scrolls so that image point (x, y) is
+// at the canvas center on the next frame.
+func (v *Viewer) ZoomOn(x, y float64, zoom float32) {
+	v.zoom = float32(math.Min(64, math.Max(0.005, float64(zoom))))
+	v.needFit = false
+	v.CenterOn(x, y)
+}
+
 // Zoom returns screen pixels per image pixel.
 func (v *Viewer) Zoom() float32 { return v.zoom }
 
