@@ -1,0 +1,12 @@
+[Unit]
+Description=AFVI Teach CI: fetch GitHub, build and publish what is new
+Documentation=file://@CI_HOME@/README.txt
+
+[Service]
+Type=oneshot
+Environment=AFVI_CI_HOME=@CI_HOME@
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=@CI_HOME@/bin/ci poll
+# Builds must not slow down whatever else the server is doing.
+Nice=10
+TimeoutStartSec=3h

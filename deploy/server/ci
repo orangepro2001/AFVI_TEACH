@@ -1,0 +1,604 @@
+#!/usr/bin/env bash
+# ci - AFVI Teach build server driver. Runs on the Linux build server (docs/SERVER_CI.md).
+#
+#   ci poll                                fetch GitHub, build and publish what is new (the timer runs this)
+#   ci build main|<tag> [--force] [--no-publish]
+#                                          build one target now (--force: even if it was built before)
+#   ci publish main|<tag>                  publish an already built target to GitHub again
+#   ci status                              what is built, published or failed; token, timer, disk
+#   ci baseline                            mark every tag that exists now as handled (never built)
+#   ci set-token                           store the GitHub token (asked on the terminal, never echoed)
+#   ci gc                                  drop old main builds and stale work folders
+#
+# Everything lives under CI_HOME (default ~/ci/afvi-teach, env AFVI_CI_HOME):
+#   bin/    this script            etc/    ci.conf and the token
+#   src.git/ bare mirror of the repo   work/   throwaway checkouts, one per running build
+#   cache/  Go module and build caches
+#   out/    one folder per build: installer, SHA256SUMS.txt, build.log, meta.json
+#   state/  the lock file
+#
+# main: every new head is built and replaces the rolling prerelease "nightly".
+# v* tags: built once and published as their own Release. Tags are treated as immutable.
+
+set -euo pipefail
+
+CI_HOME=${AFVI_CI_HOME:-$HOME/ci/afvi-teach}
+CONF=$CI_HOME/etc/ci.conf
+TOKEN_FILE=$CI_HOME/etc/github-token
+SRC=$CI_HOME/src.git
+WORK=$CI_HOME/work
+OUT=$CI_HOME/out
+STATE=$CI_HOME/state
+
+# Defaults, overridden by etc/ci.conf
+REPO=orangepro2001/AFVI_TEACH
+BRANCH=main
+TAG_GLOB='v*'
+KEEP_MAIN=10
+BUILD_TIMEOUT=45m
+RETRY_MAX=3
+RETRY_WAIT=600
+if [ -f "$CONF" ]; then
+    # shellcheck disable=SC1090
+    . "$CONF"
+fi
+
+# The three URLs can be redirected to a local mock for testing.
+CLONE_URL=${AFVI_CI_CLONE_URL:-https://github.com/$REPO.git}
+API=${AFVI_CI_API:-https://api.github.com}
+UPLOADS=${AFVI_CI_UPLOADS:-https://uploads.github.com}
+
+export GOMODCACHE=$CI_HOME/cache/gomod
+export GOCACHE=$CI_HOME/cache/gobuild
+
+TOKEN=""
+API_CODE=""
+API_BODY=""
+RELEASE_URL=""
+WORKED=0
+CUR_DIR=""
+CUR_WORK=""
+
+log() { printf 'ci: %s\n' "$*"; }
+die() {
+    printf 'ci: %s\n' "$*" >&2
+    exit 1
+}
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+usage() {
+    sed -n '/^# ci - /,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# --- build folders and their meta.json ------------------------------------------------------
+
+# meta_get <dir> <key>: the value, empty when missing, null or false.
+meta_get() { jq -r --arg k "$2" '.[$k] // empty' "$1/meta.json" 2>/dev/null || true; }
+
+# meta_update <dir> <jq filter> [jq options]
+meta_update() {
+    local dir=$1 filter=$2 tmp
+    shift 2
+    tmp=$(mktemp "$dir/.meta.XXXXXX")
+    if ! jq "$@" "$filter" "$dir/meta.json" > "$tmp"; then
+        rm -f "$tmp"
+        return 1
+    fi
+    mv "$tmp" "$dir/meta.json"
+}
+
+# target_dir main <sha> | tag <name>: the folder of that target, existing or the path a new build uses.
+target_dir() {
+    local kind=$1 key=$2 d
+    if [ "$kind" = tag ]; then
+        printf '%s/tags/%s\n' "$OUT" "$key"
+        return
+    fi
+    d=$(find "$OUT/main" -maxdepth 1 -type d -name "*-${key:0:7}" 2>/dev/null | head -n 1 || true)
+    printf '%s\n' "${d:-$OUT/main/$(date +%Y%m%d-%H%M%S)-${key:0:7}}"
+}
+
+# due <dir>: success when the target has to be (re)built.
+due() {
+    local dir=$1 tries fin
+    [ -f "$dir/meta.json" ] || return 0
+    case $(meta_get "$dir" status) in
+        built | baseline) return 1 ;;
+        failed)
+            tries=$(meta_get "$dir" attempts)
+            [ "${tries:-1}" -lt "$RETRY_MAX" ] || return 1
+            fin=$(meta_get "$dir" finished_epoch)
+            [ $(($(date +%s) - ${fin:-0})) -ge "$RETRY_WAIT" ]
+            ;;
+        *) return 0 ;; # building / interrupted: left behind by a run that died
+    esac
+}
+
+# --- GitHub ---------------------------------------------------------------------------------
+
+load_token() {
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        TOKEN=$GITHUB_TOKEN
+    elif [ -r "$TOKEN_FILE" ]; then
+        TOKEN=$(tr -d ' \r\n' < "$TOKEN_FILE")
+    fi
+    [ -n "$TOKEN" ]
+}
+
+# gh_api METHOD URL [curl options]: sets API_CODE and API_BODY. The token goes in through a curl
+# config on a pipe, so it never shows up in the process list.
+gh_api() {
+    local method=$1 url=$2 out
+    shift 2
+    if ! out=$(curl -sS -m "${API_TIMEOUT:-60}" -X "$method" \
+        -K <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") \
+        -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' \
+        -w '\n%{http_code}' "$@" "$url"); then
+        API_CODE=000
+        API_BODY=""
+        return 1
+    fi
+    API_CODE=${out##*$'\n'}
+    API_BODY=${out%$'\n'*}
+}
+
+# expect <code>...: success when the last answer was one of them, else log what GitHub said.
+expect() {
+    local c
+    for c in "$@"; do
+        [ "$API_CODE" = "$c" ] && return 0
+    done
+    log "GitHub answered $API_CODE: $(printf '%s' "$API_BODY" | head -c 300)"
+    return 1
+}
+
+# set_commit_status <sha> <state> <text>: the green/red mark next to the commit; best effort.
+set_commit_status() {
+    load_token || return 0
+    gh_api POST "$API/repos/$REPO/statuses/$1" -H 'Content-Type: application/json' \
+        -d "$(jq -nc --arg s "$2" --arg d "${3:0:140}" '{state:$s,context:"afvi-ci/server",description:$d}')" || true
+    [ "$API_CODE" = 201 ] || log "commit status not set (GitHub answered $API_CODE; the token needs Commit statuses: Read and write)"
+}
+
+# upload_assets <release id> <dir> [names already on the release]
+upload_assets() {
+    local id=$1 dir=$2 have=${3:-} f name
+    for f in "$dir"/AFVI-Teach-Setup-*.exe "$dir/SHA256SUMS.txt"; do
+        name=$(basename "$f")
+        if [ -n "$have" ] && grep -qxF "$name" <<< "$have"; then
+            continue
+        fi
+        API_TIMEOUT=900 gh_api POST "$UPLOADS/repos/$REPO/releases/$id/assets?name=$name" \
+            -H 'Content-Type: application/octet-stream' --data-binary @"$f" || return 1
+        expect 201 || return 1
+    done
+}
+
+# publish_nightly <sha> <version> <dir>: delete the old rolling prerelease (and its tag), create it
+# again on this commit.
+publish_nightly() {
+    local sha=$1 version=$2 dir=$3 id subject notes body
+    gh_api GET "$API/repos/$REPO/releases/tags/nightly" || return 1
+    case $API_CODE in
+        200)
+            id=$(jq -r .id <<< "$API_BODY")
+            gh_api DELETE "$API/repos/$REPO/releases/$id" || return 1
+            expect 204 || return 1
+            ;;
+        404) ;;
+        *)
+            expect 200 404
+            return 1
+            ;;
+    esac
+    gh_api DELETE "$API/repos/$REPO/git/refs/tags/nightly" || return 1
+    expect 204 404 422 || return 1
+
+    subject=$(git -C "$SRC" log -1 --format=%s "$sha")
+    notes=$(printf '%s\n' \
+        "每次推送到 main 自动构建的滚动预发布，下一次推送会覆盖它。" \
+        "" \
+        "- 提交：${sha:0:7}（$subject）" \
+        "- 版本号：$version" \
+        "- 在自有构建服务器上构建，安装包未签名，不运行 -selftest。需要稳定版本请用带版本号的 Release。")
+    body=$(jq -nc --arg sha "$sha" --arg name "Nightly (main ${sha:0:7})" --arg notes "$notes" \
+        '{tag_name:"nightly",target_commitish:$sha,name:$name,body:$notes,prerelease:true,draft:false}')
+    gh_api POST "$API/repos/$REPO/releases" -H 'Content-Type: application/json' -d "$body" || return 1
+    expect 201 || return 1
+    id=$(jq -r .id <<< "$API_BODY")
+    RELEASE_URL=$(jq -r .html_url <<< "$API_BODY")
+    upload_assets "$id" "$dir"
+}
+
+# publish_tag <tag> <sha> <dir>: a Release of its own; one that already exists is never replaced,
+# only completed with the files it lacks.
+publish_tag() {
+    local tag=$1 sha=$2 dir=$3 id have="" pre=false body
+    case $tag in *-*) pre=true ;; esac
+    gh_api GET "$API/repos/$REPO/releases/tags/$tag" || return 1
+    case $API_CODE in
+        200)
+            id=$(jq -r .id <<< "$API_BODY")
+            RELEASE_URL=$(jq -r .html_url <<< "$API_BODY")
+            have=$(jq -r '.assets[].name' <<< "$API_BODY")
+            ;;
+        404)
+            body=$(jq -nc --arg tag "$tag" --arg sha "$sha" --argjson pre "$pre" \
+                '{tag_name:$tag,target_commitish:$sha,name:$tag,generate_release_notes:true,prerelease:$pre,draft:false}')
+            gh_api POST "$API/repos/$REPO/releases" -H 'Content-Type: application/json' -d "$body" || return 1
+            expect 201 || return 1
+            id=$(jq -r .id <<< "$API_BODY")
+            RELEASE_URL=$(jq -r .html_url <<< "$API_BODY")
+            ;;
+        *)
+            expect 200 404
+            return 1
+            ;;
+    esac
+    upload_assets "$id" "$dir" "$have"
+}
+
+# publish_target <kind> <name> <sha> <dir>
+publish_target() {
+    local kind=$1 name=$2 sha=$3 dir=$4 rc=0
+    meta_update "$dir" '.publish_tried=$e' --argjson e "$(date +%s)"
+    RELEASE_URL=""
+    if [ "$kind" = main ]; then
+        publish_nightly "$sha" "$(meta_get "$dir" version)" "$dir" || rc=$?
+    else
+        publish_tag "$name" "$sha" "$dir" || rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        log "publishing $kind $name failed, retry in ${RETRY_WAIT}s"
+        return 1
+    fi
+    meta_update "$dir" '.published=true | .published_at=$t | .release_url=$u' --arg t "$(now)" --arg u "$RELEASE_URL"
+    log "published $kind $name: $RELEASE_URL"
+}
+
+# --- source and build -----------------------------------------------------------------------
+
+sync_mirror() {
+    if [ ! -d "$SRC" ]; then
+        git init --quiet --bare "$SRC"
+        git -C "$SRC" symbolic-ref HEAD "refs/heads/$BRANCH"
+        git -C "$SRC" remote add origin "$CLONE_URL"
+    fi
+    git -C "$SRC" remote set-url origin "$CLONE_URL"
+    git -C "$SRC" fetch --quiet --prune --force origin "+refs/heads/$BRANCH:refs/heads/$BRANCH" '+refs/tags/*:refs/tags/*'
+}
+
+head_sha() { git -C "$SRC" rev-parse --verify -q "refs/heads/$BRANCH^{commit}"; }
+tag_sha() { git -C "$SRC" rev-parse --verify -q "refs/tags/$1^{commit}"; }
+list_tags() { git -C "$SRC" for-each-ref --format='%(refname:strip=2)' "refs/tags/$TAG_GLOB"; }
+
+# finish_build <work> <dir>: copy the installer out of the checkout, checksum it, record it in meta.json.
+finish_build() {
+    local work=$1 dir=$2 files
+    compgen -G "$work/dist/AFVI-Teach-Setup-*.exe" > /dev/null || return 1
+    cp "$work"/dist/AFVI-Teach-Setup-*.exe "$dir/" || return 1
+    (cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe > SHA256SUMS.txt) || return 1
+    files=$(cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe | jq -R 'split("  ") | {sha256: .[0], name: .[1]}' | jq -s .) || return 1
+    meta_update "$dir" '.status="built" | .finished=$t | .finished_epoch=$e | .files=$files | .toolchain=$tc' \
+        --arg t "$(now)" --argjson e "$(date +%s)" --argjson files "$files" \
+        --arg tc "$(go version | cut -d' ' -f3), gcc $(x86_64-w64-mingw32-gcc -dumpversion)"
+}
+
+# build_target <kind> <name> <sha> <dir>: build in a throwaway clone, leave the result in <dir>.
+# Called from conditions, where set -e does not apply: every step that can fail is checked.
+build_target() {
+    local kind=$1 name=$2 sha=$3 dir=$4 attempts version="" work rc=0
+    attempts=$(($(meta_get "$dir" attempts) + 1))
+    rm -rf "$dir"
+    mkdir -p "$dir" "$WORK" || return 1
+    work=$WORK/$(basename "$dir")-$$
+    CUR_DIR=$dir
+    CUR_WORK=$work
+    if [ "$kind" = tag ]; then
+        version=$name
+    fi
+    jq -n --arg kind "$kind" --arg name "$name" --arg sha "$sha" --arg version "$version" \
+        --arg host "$(hostname)" --arg started "$(now)" --argjson attempts "$attempts" \
+        '{kind:$kind,name:$name,sha:$sha,version:$version,status:"building",attempts:$attempts,
+          published:false,host:$host,started:$started}' > "$dir/meta.json" || return 1
+
+    set_commit_status "$sha" pending "Building ${version:-$name} on $(hostname)"
+    if git clone --quiet --no-checkout "$SRC" "$work" > "$dir/build.log" 2>&1 \
+        && git -C "$work" checkout --quiet --detach "$sha" >> "$dir/build.log" 2>&1; then
+        if [ "$kind" = main ]; then
+            version=$(git -C "$work" describe --tags --always)
+            meta_update "$dir" '.version=$v' --arg v "$version"
+        fi
+        log "building $kind $name (${sha:0:7}) as $version, log $dir/build.log"
+        # TMPDIR next to the checkout, not inside it: the tests scan the source tree for Go files.
+        mkdir -p "$work.tmp"
+        (cd "$work" && TMPDIR=$work.tmp timeout --kill-after=60 "$BUILD_TIMEOUT" \
+            ./scripts/build-wsl.sh --version "$version") < /dev/null >> "$dir/build.log" 2>&1 || rc=$?
+    else
+        rc=1
+    fi
+    if [ "$rc" -eq 0 ] && ! finish_build "$work" "$dir"; then
+        rc=1
+    fi
+
+    if [ "$rc" -eq 0 ]; then
+        log "built $kind $name: $(ls "$dir"/AFVI-Teach-Setup-*.exe)"
+        set_commit_status "$sha" success "Built $version on $(hostname)"
+    else
+        meta_update "$dir" '.status="failed" | .finished=$t | .finished_epoch=$e | .exit=$rc' \
+            --arg t "$(now)" --argjson e "$(date +%s)" --argjson rc "$rc"
+        log "build of $kind $name FAILED (exit $rc, attempt $attempts of $RETRY_MAX), last lines of the log:"
+        tail -n 15 "$dir/build.log" | sed 's/^/    /'
+        set_commit_status "$sha" failure "Build failed on $(hostname) (attempt $attempts)"
+        rc=1
+    fi
+    rm -rf "$work" "$work.tmp"
+    CUR_DIR=""
+    CUR_WORK=""
+    return "$rc"
+}
+
+# handle_target <kind> <name> <sha>: build when due, publish when built and not yet published.
+handle_target() {
+    local kind=$1 name=$2 sha=$3 key tried dir
+    key=$name
+    [ "$kind" = main ] && key=$sha
+    dir=$(target_dir "$kind" "$key")
+
+    if due "$dir"; then
+        WORKED=1
+        if ! build_target "$kind" "$name" "$sha" "$dir"; then
+            return 0
+        fi
+        if [ "$kind" = main ]; then
+            ln -sfn "$dir" "$OUT/latest-main"
+            sync_mirror || true
+        else
+            ln -sfn "$dir" "$OUT/latest-release"
+        fi
+    fi
+
+    load_token || return 0
+    [ "$(meta_get "$dir" status)" = built ] || return 0
+    [ "$(meta_get "$dir" published)" = true ] && return 0
+    if [ "$kind" = main ] && [ "$(head_sha)" != "$sha" ]; then
+        log "main moved on, not publishing ${sha:0:7}"
+        return 0
+    fi
+    tried=$(meta_get "$dir" publish_tried)
+    [ $(($(date +%s) - ${tried:-0})) -ge "$RETRY_WAIT" ] || return 0
+    WORKED=1
+    publish_target "$kind" "$name" "$sha" "$dir" || true
+}
+
+# --- housekeeping ---------------------------------------------------------------------------
+
+on_exit() {
+    if [ -n "$CUR_DIR" ] && [ "$(meta_get "$CUR_DIR" status)" = building ]; then
+        meta_update "$CUR_DIR" '.status="interrupted"' || true
+    fi
+    if [ -n "$CUR_WORK" ]; then
+        rm -rf "$CUR_WORK" "$CUR_WORK.tmp"
+    fi
+    return 0
+}
+
+init_dirs() {
+    mkdir -p "$OUT/main" "$OUT/tags" "$WORK" "$STATE" "$GOMODCACHE" "$GOCACHE" "$CI_HOME/etc"
+}
+
+# lock: one run at a time, whoever started it. Fails when another run holds it.
+lock() {
+    exec 9> "$STATE/lock"
+    flock -n 9
+}
+
+# --- commands -------------------------------------------------------------------------------
+
+cmd_poll() {
+    local round t sha head
+    local -a tags
+    if ! lock; then
+        log "another run is in progress"
+        return 0
+    fi
+    for round in 1 2 3 4 5; do
+        WORKED=0
+        if ! sync_mirror; then
+            log "cannot fetch $CLONE_URL, will try again"
+            return 0
+        fi
+        mapfile -t tags < <(list_tags)
+        for t in "${tags[@]}"; do
+            sha=$(tag_sha "$t") || continue
+            handle_target tag "$t" "$sha"
+        done
+        if head=$(head_sha); then
+            handle_target main "$BRANCH" "$head"
+        fi
+        [ "$WORKED" = 1 ] || break
+    done
+    cmd_gc
+}
+
+cmd_build() {
+    local target=${1:-} force=0 publish=1 kind name sha dir
+    [ -n "$target" ] || die "usage: ci build main|<tag> [--force] [--no-publish]"
+    shift
+    while [ $# -gt 0 ]; do
+        case $1 in
+            --force) force=1 ;;
+            --no-publish) publish=0 ;;
+            *) die "unknown option $1" ;;
+        esac
+        shift
+    done
+    lock || die "another run is in progress"
+    sync_mirror
+    if [ "$target" = main ]; then
+        kind=main
+        name=$BRANCH
+        sha=$(head_sha) || die "no $BRANCH in the mirror"
+        dir=$(target_dir main "$sha")
+    else
+        kind=tag
+        name=$target
+        sha=$(tag_sha "$target") || die "no tag $target"
+        dir=$(target_dir tag "$name")
+    fi
+    if [ "$force" = 1 ]; then
+        rm -rf "$dir"
+    fi
+    if [ "$force" = 1 ] || due "$dir"; then
+        build_target "$kind" "$name" "$sha" "$dir" || exit 1
+        if [ "$kind" = main ]; then
+            ln -sfn "$dir" "$OUT/latest-main"
+        else
+            ln -sfn "$dir" "$OUT/latest-release"
+        fi
+    else
+        log "$kind $name is already $(meta_get "$dir" status), use --force to build it again"
+    fi
+    if [ "$publish" = 1 ] && [ "$(meta_get "$dir" status)" = built ] && [ "$(meta_get "$dir" published)" != true ]; then
+        if load_token; then
+            publish_target "$kind" "$name" "$sha" "$dir" || exit 1
+        else
+            log "no token, not published (ci set-token)"
+        fi
+    fi
+}
+
+cmd_publish() {
+    local target=${1:-} kind name sha dir
+    [ -n "$target" ] || die "usage: ci publish main|<tag>"
+    load_token || die "no token (ci set-token)"
+    lock || die "another run is in progress"
+    if [ "$target" = main ]; then
+        kind=main
+        name=$BRANCH
+        dir=$(readlink -f "$OUT/latest-main") || die "nothing built yet"
+    else
+        kind=tag
+        name=$target
+        dir=$OUT/tags/$target
+    fi
+    [ "$(meta_get "$dir" status)" = built ] || die "$target has no finished build"
+    sha=$(meta_get "$dir" sha)
+    publish_target "$kind" "$name" "$sha" "$dir"
+}
+
+cmd_baseline() {
+    local t dir
+    local -a tags
+    lock || die "another run is in progress"
+    sync_mirror
+    mapfile -t tags < <(list_tags)
+    for t in "${tags[@]}"; do
+        dir=$OUT/tags/$t
+        [ -f "$dir/meta.json" ] && continue
+        mkdir -p "$dir"
+        jq -n --arg name "$t" --arg sha "$(tag_sha "$t")" --arg t "$(now)" \
+            '{kind:"tag",name:$name,sha:$sha,version:$name,status:"baseline",published:false,finished:$t}' > "$dir/meta.json"
+        log "baseline: tag $t exists already, it will not be built"
+    done
+}
+
+cmd_status() {
+    local d head
+    printf 'CI home    %s\n' "$CI_HOME"
+    if load_token; then
+        printf 'token      present\n'
+    else
+        printf 'token      MISSING, builds stay unpublished (ci set-token)\n'
+    fi
+    printf 'timer      %s' "$(systemctl --user is-active afvi-ci.timer 2> /dev/null || true)"
+    printf '   %s\n' "$(systemctl --user list-timers afvi-ci.timer --no-legend 2> /dev/null | awk '{print "next:", $1, $2, $3}' || true)"
+    if [ -d "$SRC" ] && head=$(head_sha); then
+        printf '%-10s %s  %s\n' "$BRANCH" "${head:0:7}" "$(git -C "$SRC" log -1 --format=%s "$head")  (as of the last poll)"
+    fi
+    echo
+    {
+        printf 'KIND\tNAME\tSHA\tVERSION\tSTATUS\tTRIES\tPUBLISHED\tFINISHED\n'
+        for d in $(find "$OUT/main" -mindepth 1 -maxdepth 1 -type d | sort -r | head -n "$KEEP_MAIN") "$OUT"/tags/*; do
+            [ -f "$d/meta.json" ] || continue
+            jq -r '[.kind, .name, .sha[0:7], .version, .status, (.attempts // "-"),
+                    (if .published then "yes" else "-" end), (.finished // "-")] | @tsv' "$d/meta.json"
+        done
+    } | column -t -s $'\t'
+    echo
+    du -sh "$OUT" "$CI_HOME/cache" "$SRC" 2> /dev/null | sed 's/^/disk       /' || true
+}
+
+cmd_set_token() {
+    local t
+    [ -t 0 ] || die "run this on a terminal, it reads the token without echoing it"
+    read -rsp "GitHub token for $REPO (fine-grained: Contents + Commit statuses, Read and write): " t
+    echo
+    [ -n "$t" ] || die "empty token"
+    TOKEN=$t
+    gh_api GET "$API/repos/$REPO" || die "cannot reach GitHub"
+    [ "$API_CODE" = 200 ] || die "GitHub rejected the token (answered $API_CODE)"
+    # The permissions GitHub shows for the repository belong to the account, not to the token, so
+    # probe for real. Deleting a ref that does not exist answers 422 with Contents: write, 403 without.
+    gh_api DELETE "$API/repos/$REPO/git/refs/tags/ci-probe-does-not-exist" || die "cannot reach GitHub"
+    case $API_CODE in
+        404 | 422) ;;
+        403) die "the token cannot write to $REPO: it needs Contents: Read and write, and Repository access must be 'Only select repositories' with this one chosen ('Public repositories' is read-only)" ;;
+        *) die "unexpected answer $API_CODE while checking the token: $(printf '%s' "$API_BODY" | head -c 200)" ;;
+    esac
+    # Same idea for the commit status: a status on a commit that does not exist answers 422 or 403.
+    gh_api POST "$API/repos/$REPO/statuses/0000000000000000000000000000000000000000" \
+        -H 'Content-Type: application/json' -d '{"state":"success","context":"afvi-ci/probe"}' || true
+    if [ "$API_CODE" = 403 ]; then
+        log "warning: no Commit statuses permission, commits will not show the build result (publishing works)"
+    fi
+    (
+        umask 077
+        printf '%s\n' "$t" > "$TOKEN_FILE"
+    )
+    chmod 600 "$TOKEN_FILE"
+    log "token saved to $TOKEN_FILE (it can write to $REPO)"
+}
+
+cmd_gc() {
+    local d
+    while read -r d; do
+        [ -n "$d" ] || continue
+        rm -rf "${OUT:?}/main/$d"
+        log "removed old build main/$d"
+    done < <(find "$OUT/main" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -r | tail -n +$((KEEP_MAIN + 1)))
+    find "$WORK" -mindepth 1 -maxdepth 1 -mtime +1 -exec rm -rf {} + 2> /dev/null || true
+}
+
+main() {
+    local cmd=${1:-}
+    [ $# -eq 0 ] || shift
+    case $cmd in
+        '' | -h | --help | help)
+            usage
+            return 0
+            ;;
+    esac
+    local c
+    for c in git jq curl flock timeout sha256sum; do
+        command -v "$c" > /dev/null || die "$c is not installed"
+    done
+    init_dirs
+    trap on_exit EXIT
+    trap 'exit 143' TERM INT
+    case $cmd in
+        poll) cmd_poll ;;
+        build) cmd_build "$@" ;;
+        publish) cmd_publish "$@" ;;
+        status) cmd_status ;;
+        baseline) cmd_baseline ;;
+        set-token) cmd_set_token ;;
+        gc) cmd_gc ;;
+        *)
+            usage >&2
+            exit 2
+            ;;
+    esac
+}
+
+main "$@"

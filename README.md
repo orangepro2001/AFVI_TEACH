@@ -57,7 +57,7 @@ x86_64-w64-mingw32-gcc --version
 
 一个自解压安装程序（纯 Go，不需要 NSIS / Inno Setup），把教学程序、相机工作室、`camera.exe`、文档与机台配置示例装到 `%LOCALAPPDATA%\Programs\AFVI Teach`（每用户安装，不需要管理员权限），并创建开始菜单 / 桌面快捷方式、命令行入口（可选加入 PATH）和“应用和功能”里的卸载项。图形向导或 `-silent` 静默安装，`uninstall.exe` 卸载并默认保留 `afvi.toml` 与 `captures`。Windows 原生用 `scripts\package.ps1`。参数与细节见 [docs/BUILD.md](docs/BUILD.md)。
 
-推送 `v*` 的 tag（`git tag v1.0.0 && git push origin v1.0.0`）会触发 GitHub Actions（`.github/workflows/release.yml`）：在云端跑同一个一键构建脚本，并把安装包和 `SHA256SUMS.txt` 发布到对应的 GitHub Release；也可在 Actions 页手动 Run workflow 试跑（只产出 artifact）。详见 [docs/BUILD.md](docs/BUILD.md)。
+推送之后的构建和发布由一台 Linux 构建服务器自动完成，本机只做开发和测试：服务器每分钟检查 GitHub，`main` 有新提交就跑同一个一键构建脚本并覆盖滚动预发布 `nightly`，推送 `v*` 的 tag（`git tag v1.0.0 && git push origin v1.0.0`）就发布同名 Release，附安装包和 `SHA256SUMS.txt`。GitHub Actions 里的 `release.yml` 只保留手动试跑（只产出 artifact）。安装、token 与服务器上的目录布局见 [docs/SERVER_CI.md](docs/SERVER_CI.md)，概览见 [docs/BUILD.md](docs/BUILD.md)。
 
 ### 运行（Windows 环境）
 

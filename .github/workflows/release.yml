@@ -1,15 +1,15 @@
-# Release - 构建 Windows 安装包并在打 tag 时发布。
+# Release - 在 GitHub 云端手动试跑一次完整构建（备用）。
 #
-# 触发：推送形如 v* 的 tag（git tag v1.0.0 && git push origin v1.0.0），
-#       或在 Actions 页手动 Run workflow（只构建并上传 artifact，不发布）。
+# 自动构建与发布由自有构建服务器负责（deploy/server/、docs/SERVER_CI.md）：推送到 main 覆盖滚动
+# 预发布 nightly，推送 v* tag 发布同名 Release。所以这个工作流没有 push / tag 触发器，也不发布
+# Release，免得两边同时改 nightly；它只在 Actions 页手动 Run workflow 时运行，用来在干净的云端
+# 环境里验证构建，产物作为 artifact 保留 14 天（服务器不可用时也可以人工下载后手动发布）。
 # 产物：dist/AFVI-Teach-Setup-<版本>.exe 与 dist/SHA256SUMS.txt。
 # 构建由 scripts/build-wsl.sh 完成（gofmt、vet、纯 Go 测试、三个 exe、安装包）。
 
 name: Release
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
@@ -24,11 +24,12 @@ jobs:
     name: Build installer
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
     steps:
+      # 完整历史与 tag：版本号取 git describe（如 v0.1.0-rc2-3-gabc1234）。
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v6
@@ -42,19 +43,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mingw-w64
 
-      # ref 名通过环境变量传入而不是插进脚本，避免 tag 名里的 shell 元字符被执行。
       - name: Determine version
         id: version
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          if [ "$REF_TYPE" = tag ]; then
-            v="$REF_NAME"
-          else
-            v="dev-${GITHUB_SHA::7}"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(git describe --tags --always)" >> "$GITHUB_OUTPUT"
 
       # gofmt、vet、纯 Go 测试、三个 exe、安装包；reference/ 被 git 忽略且可能保密，
       # 所以安装包不含机台数据；-selftest 需要 Windows 桌面窗口，CI 不运行。
@@ -78,14 +69,3 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
-
-      - name: Publish GitHub Release
-        if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/AFVI-Teach-Setup-*.exe
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, '-') }}

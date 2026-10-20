@@ -1,0 +1,21 @@
+# ci.conf - settings of the build server driver (bin/ci). Plain shell assignments, read at every run.
+# install.sh copies this file to etc/ci.conf once and never overwrites it. No secrets here: the
+# GitHub token lives in etc/github-token (mode 600, written by `ci set-token`).
+
+# GitHub repository (owner/name). It is public, so the server fetches the source without credentials.
+REPO=orangepro2001/AFVI_TEACH
+
+# main builds replace the rolling prerelease "nightly"; tags matching the pattern get a Release of their own.
+BRANCH=main
+TAG_GLOB='v*'
+
+# How many main build folders to keep under out/main (tag builds are kept for ever).
+KEEP_MAIN=10
+
+# Time limit of one scripts/build-wsl.sh run.
+BUILD_TIMEOUT=45m
+
+# A failed build or publish is tried again after RETRY_WAIT seconds, a build at most RETRY_MAX times in all
+# (a new commit starts afresh; `ci build main --force` ignores the limit).
+RETRY_MAX=3
+RETRY_WAIT=600

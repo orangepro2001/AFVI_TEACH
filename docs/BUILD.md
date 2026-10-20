@@ -98,20 +98,25 @@ uninstall.exe                               # 卸载（开始菜单、“应用�
 
 图形向导自测：`setup.exe -dir <文件夹> -lang en -selftest <输出目录>` 会自己点完整个向导并保存 `setup-options.png`、`setup-done.png`（会真的安装到 `-dir`，并创建快捷方式，之后用 `uninstall.exe -uninstall -silent -purge` 清理）。
 
-### 自动构建与发布（GitHub Actions）
+### 自动构建与发布（构建服务器）
 
-推送形如 `v*` 的 tag 会触发 `.github/workflows/release.yml`：在 ubuntu-latest 上安装 `mingw-w64`，运行 `./scripts/build-wsl.sh --version <tag>`（gofmt、vet、纯 Go 测试、三个 exe、安装包），再把 `AFVI-Teach-Setup-<tag>.exe` 和 `SHA256SUMS.txt` 上传到同名 GitHub Release（自动生成发布说明；tag 里含 `-`，如 `v1.0.0-rc1`，标为预发布）。
+推送之后的构建和发布由一台 Linux 服务器（ssh 别名 `AI`）完成，本机只做开发和测试。服务器上的 systemd 用户定时器每分钟 fetch 一次 GitHub，发现 `main` 有新提交或出现新的 `v*` tag，就在临时检出里运行 `./scripts/build-wsl.sh --version <版本>`（gofmt、vet、纯 Go 测试、三个 exe、安装包），再通过 GitHub API 发布 `AFVI-Teach-Setup-<版本>.exe` 和 `SHA256SUMS.txt`：
+
+- **推送到 `main`**：发布到固定的滚动预发布 `nightly`。先删掉上一次的 `nightly`（连同它的 tag），再在本次提交上重新创建，所以 Release 页上只有最新一次 `main` 的安装包。版本号取 `git describe --tags --always`（如 `v0.1.0-rc2-3-gabc1234`，即最近的 tag + 之后的提交数 + 短哈希）。构建失败（gofmt、vet、测试、打包任一步）时不会动现有的 `nightly`。
+- **推送 `v*` 的 tag**：发布同名 Release（自动生成发布说明；tag 里含 `-`，如 `v1.0.0-rc1`，标为预发布），版本号就是 tag 名，这个 Release 不会被覆盖。
 
 ```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-- 在 GitHub 的 Actions 页选 Release → Run workflow 可手动试跑：只构建并把安装包作为 artifact 保留 14 天，不创建 Release，版本号为 `dev-<提交短哈希>`。
-- 不用 GoReleaser：程序是 cgo + MinGW 交叉编译，还要 windres 与自解压安装包，现有脚本已经完成这些，工作流只负责准备环境并调用它。
-- 安装包不含 `reference/` 机台数据（被 git 忽略，也可能保密）；CI 不运行 `-selftest`（需要真实的 Windows 桌面窗口），自测仍在本机 Windows 上做；安装包未签名。
-- 工作流用的是仓库里的 `scripts/build-wsl.sh`，所以脚本依赖的文件（`scripts/package-wsl.sh`、`cmd/setup`、`cmd/mkinstaller`、`internal/installer`、`assets/icons` 等）必须已提交并推送，否则 CI 里构建会失败。
-- 第一次编译 cgo 包装层较慢；`actions/setup-go` 的缓存会加快后续运行。
+- 服务器的安装、GitHub token、目录布局、日常命令（`ci status`、手动构建、重新发布）、失败重试规则和安全注意事项见 [SERVER_CI.md](SERVER_CI.md)。每次构建一个文件夹（安装包、`SHA256SUMS.txt`、`build.log`、`meta.json`），在服务器的 `~/ci/afvi-teach/out/`。
+- 每次推送到 `main` 都会公开发布一个未签名的安装包，包括只改文档的推送。
+- `.github/workflows/release.yml` 只剩手动触发：在 GitHub 的 Actions 页选 Release → Run workflow，可以在干净的云端环境试跑一次构建，安装包作为 artifact 保留 14 天，不创建 Release。它没有 push / tag 触发器，免得和服务器同时改 `nightly`。
+- 不用 GoReleaser：程序是 cgo + MinGW 交叉编译，还要 windres 与自解压安装包，现有脚本已经完成这些，服务器和工作流都只是准备环境并调用它。
+- 安装包不含 `reference/` 机台数据（被 git 忽略，也可能保密）；自动构建不运行 `-selftest`（需要真实的 Windows 桌面窗口），自测仍在本机 Windows 上做；安装包未签名。
+- 构建用的是仓库里的 `scripts/build-wsl.sh`，所以脚本依赖的文件（`scripts/package-wsl.sh`、`cmd/setup`、`cmd/mkinstaller`、`internal/installer`、`assets/icons` 等）必须已提交并推送，否则服务器上的构建会失败。
+- 服务器保留 Go 编译缓存，第一次编译 cgo 包装层较慢，之后的构建快得多。
 
 可选：运行配置包与核心算法测试（纯 Go，无需交叉编译）
 ```bash
@@ -213,7 +218,8 @@ AFVI_TEACH/
 │   └── installer/    # 安装包载荷、解压、安装日志、卸载、PATH 编辑与文字（纯 Go，仅标准库）
 ├── configs/          # 机台配置示例（afvi.example.toml）
 ├── scripts/          # build-wsl.sh / package-wsl.sh（WSL2）、build.ps1 / package.ps1（Windows）
-├── docs/             # BUILD.md、USAGE.md、LINK.md、REFERENCE_SETUP.md
+├── deploy/server/    # 构建服务器：ci 驱动脚本、install.sh、systemd 单元（见 SERVER_CI.md）
+├── docs/             # BUILD.md、SERVER_CI.md、USAGE.md、LINK.md、REFERENCE_SETUP.md
 ├── reference/        # 机台测试数据（需单独配置）
 ├── bin/              # 构建输出（bin/teach-imgui.exe 等）
 └── dist/             # 安装包输出（dist/AFVI-Teach-Setup-<版本>.exe，已被 git 忽略）
@@ -270,4 +276,5 @@ export GOPROXY=https://goproxy.cn,direct
 - `docs/REFERENCE_SETUP.md`：机台配置与 reference 目录设置说明
 - `scripts/build.ps1`：Windows 原生构建脚本
 - `scripts/build-wsl.sh`：WSL2 构建脚本
+- `docs/SERVER_CI.md`、`deploy/server/`：构建服务器的自动构建与发布
 - `configs/afvi.example.toml`：机台配置示例

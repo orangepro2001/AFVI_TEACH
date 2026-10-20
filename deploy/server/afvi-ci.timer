@@ -1,0 +1,11 @@
+[Unit]
+Description=AFVI Teach CI: look for new commits and tags on GitHub every minute
+
+[Timer]
+OnActiveSec=15s
+# Counted from the end of the previous run, so a long build never overlaps the next poll.
+OnUnitInactiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
