@@ -43,6 +43,7 @@ type Selftest struct {
 	seq         []viewerInput
 	seqIdx      int
 	flow        *AlignFlow
+	golden      *goldenBoard
 }
 
 type selftestStep struct {
@@ -1174,7 +1175,7 @@ func NewSelftest(a *App, out string) *Selftest {
 				dp.sel.set = nil
 				dp.noise = core.SensorNoise{Seed: 1}
 				dp.paramsOpen = false
-				dp.inspectParams[core.ChRed] = newInspectParams()
+				dp.inspectParams[core.ChRed] = dp.freshParams()
 				dp.learned[core.ChRed] = false
 				dp.relearn = false
 				cx, cy := dp.findSrPoint()
@@ -2458,6 +2459,8 @@ func NewSelftest(a *App, out string) *Selftest {
 	)
 	s.steps = insertBefore(s.steps, "teach-start", s.legacyStep())
 	s.steps = append(s.steps, s.flowSteps()...)
+	s.steps = append(s.steps, s.goldenSteps()...)
+	s.steps = append(s.steps, s.goldenEndToEnd()...)
 	s.steps = append(s.steps, s.roleSteps()...)
 	s.steps = append(s.steps, s.studioRoleSteps()...)
 	s.steps = filterSteps(s.steps, a.profile)
@@ -2555,9 +2558,32 @@ var teachOnlySteps = map[string]bool{
 	"flow-attach":           true,
 	"flow-draw":             true,
 	"flow-confirm":          true,
+	"flow-channel-green":    true,
+	"flow-channel-blue":     true,
 	"flow-edit":             true,
 	"roles-operator":        true,
 	"roles-confirm":         true,
+	"roles-golden":          true,
+	"golden-attach":         true,
+	"golden-range":          true,
+	"golden-morph":          true,
+	"golden-undo":           true,
+	"golden-padding":        true,
+	"golden-padding-zero":   true,
+	"golden-srinset":        true,
+	"golden-add-rect":       true,
+	"golden-erase-ellipse":  true,
+	"golden-add-polygon":    true,
+	"golden-add-mingv":      true,
+	"golden-area":           true,
+	"golden-save":           true,
+	"golden-load":           true,
+	"golden-i18n-en":        true,
+	"golden-i18n-ko":        true,
+	"golden-inspect":        true,
+	"golden-e2e-good":       true,
+	"golden-e2e-defects":    true,
+	"roles-flat-channel":    true,
 	"roles-inspect":         true,
 	"roles-inspect-en":      true,
 	"roles-login":           true,

@@ -32,13 +32,13 @@ func init() {
 		"opAlign.title":        "对位",
 		"opAlign.step.off":     "第 1 步：在假想图上确认框的位置（拖动画新框，拖动框移动，Delete 删除），然后点击“确定对位”。",
 		"opAlign.step.working": "正在对位，请稍候……",
-		"opAlign.step.done":    "对位完成。下一步：切换到“检测”页。",
-		"opAlign.step.failed":  "对位失败：{reason}。请调整框的位置后再次点击“确定对位”。",
+		"opAlign.step.done":    "对位完成。下一步：切换到“金板”页，确认检查区域。",
+		"opAlign.step.failed":  "对位失败。\n{reason}",
 		"opAlign.confirm":      "确定对位",
 		"opAlign.reset":        "恢复默认框",
 		"opAlign.delete":       "删除选中框",
 		"opAlign.needTwo":      "至少需要两个框。",
-		"opAlign.toInspect":    "下一步：检测",
+		"opAlign.toGolden":     "下一步：金板",
 		"opAlign.help.1":       "1. 这是按设计图画出的假想产品图，框要框住有明显特征的位置（四角、边缘、金属块）。",
 		"opAlign.help.2":       "2. 在图上拖动画一个新框，框内拖动可移动，选中后按 Delete 删除。",
 		"opAlign.help.3":       "3. 框好以后点击左侧“确定对位”。",
@@ -95,13 +95,13 @@ func init() {
 		"opAlign.title":        "Align",
 		"opAlign.step.off":     "Step 1: confirm the box positions on the design picture (drag to draw a box, drag inside to move, Delete to remove), then press Confirm.",
 		"opAlign.step.working": "Aligning, please wait…",
-		"opAlign.step.done":    "Aligned. Next: switch to the Inspect page.",
-		"opAlign.step.failed":  "Align failed: {reason}. Adjust the boxes and press Confirm again.",
+		"opAlign.step.done":    "Aligned. Next: switch to the Golden Board page and confirm the inspection area.",
+		"opAlign.step.failed":  "Alignment failed.\n{reason}",
 		"opAlign.confirm":      "Confirm",
 		"opAlign.reset":        "Restore default boxes",
 		"opAlign.delete":       "Delete selected box",
 		"opAlign.needTwo":      "At least two boxes are required.",
-		"opAlign.toInspect":    "Next: Inspect",
+		"opAlign.toGolden":     "Next: Golden Board",
 		"opAlign.help.1":       "1. This is the imagined product picture drawn from the design; the boxes must cover distinctive features (corners, edges, metal pads).",
 		"opAlign.help.2":       "2. Drag on the picture to draw a new box, drag inside a box to move it, Delete removes the selected box.",
 		"opAlign.help.3":       "3. When the boxes are placed, press Confirm on the left.",
@@ -158,13 +158,13 @@ func init() {
 		"opAlign.title":        "정렬",
 		"opAlign.step.off":     "1 단계: 가상 이미지에서 박스 위치를 확인하세요. (드래그로 새 박스, 박스 안 드래그로 이동, Delete 로 삭제) 그리고 '정렬 확인' 을 누르세요.",
 		"opAlign.step.working": "정렬 중입니다. 잠시 기다려 주세요…",
-		"opAlign.step.done":    "정렬 완료. 다음: '검사' 페이지로 이동하세요.",
-		"opAlign.step.failed":  "정렬 실패: {reason}. 박스 위치를 조정한 뒤 다시 '정렬 확인' 을 누르세요.",
+		"opAlign.step.done":    "정렬 완료. 다음: '골든 보드' 페이지로 이동해 검사 영역을 확인하세요.",
+		"opAlign.step.failed":  "정렬 실패.\n{reason}",
 		"opAlign.confirm":      "정렬 확인",
 		"opAlign.reset":        "기본 박스 복원",
 		"opAlign.delete":       "선택 박스 삭제",
 		"opAlign.needTwo":      "최소 두 개의 박스가 필요합니다.",
-		"opAlign.toInspect":    "다음: 검사",
+		"opAlign.toGolden":     "다음: 골든 보드",
 		"opAlign.help.1":       "1. 설계도로 그린 가상 제품도입니다. 뚜렷한 특징(모서리, 가장자리, 금속 패드)을 박스로 감싸세요.",
 		"opAlign.help.2":       "2. 그림 위에서 드래그하여 새 박스를 그리고, 박스 안을 드래그하면 이동합니다. Delete 로 선택한 박스를 삭제합니다.",
 		"opAlign.help.3":       "3. 박스를 배치한 뒤 왼쪽에서 '정렬 확인' 을 누르세요.",
@@ -475,6 +475,13 @@ func (p *AlignFlowPanel) reason() string {
 	if out == nil {
 		return ""
 	}
+	drawn := 0
+	if f := p.flow(); f != nil {
+		drawn = len(f.Rois)
+	}
+	if text := explainAlign(out, drawn); text != "" {
+		return text
+	}
 	if len(out.Report.Reasons) > 0 {
 		return out.Report.Reasons[0].Message
 	}
@@ -542,8 +549,8 @@ func (p *AlignFlowPanel) drawOperatorLeft() {
 		p.deleteSelected()
 	}
 	if st == alignDone {
-		if ButtonSized(T("opAlign.toInspect"), "op-align-to-inspect", btnSize, true) {
-			p.a.ShowPage("op-inspect")
+		if ButtonSized(T("opAlign.toGolden"), "op-align-to-golden", btnSize, true) {
+			p.a.ShowPage(goldenPageID)
 		}
 	}
 

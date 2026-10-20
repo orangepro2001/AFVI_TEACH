@@ -8,11 +8,12 @@ import (
 // alignTemplate is the cached design template of the real-capture alignment together with
 // the key it was built for.
 type alignTemplate struct {
-	scene *Scene
-	ch    core.CameraChannel
-	light core.LightSetting
-	scale int
-	img   *core.GrayImage
+	scene     *Scene
+	ch        core.CameraChannel
+	light     core.LightSetting
+	scale     int
+	goldenRev int // revision of the golden board the template is painted from (0 = the design layers)
+	img       *core.GrayImage
 }
 
 // AlignOutcome is the result of aligning the CURRENT capture with the taught ROIs.
@@ -23,7 +24,11 @@ type AlignOutcome struct {
 	Image     *core.GrayImage // the aligned capture (full resolution) when Usable, else nil
 	NoData    []bool          // pixels of Image the capture had no data for (filled by replication); the inspection skips them
 	ElapsedMs float64
-	Err       string // non-empty when core.AlignCapture returned an error (then Usable is false)
+	Err       string             // non-empty when core.AlignCapture returned an error (then Usable is false)
+	Channel   core.CameraChannel // the render channel this outcome was computed for
+	TplFlat   bool               // the design template of that channel has (almost) no contrast, e.g. its LED is off
+	RawFlat   bool               // the capture has (almost) no contrast, e.g. an all-black frame
+	GoldenRev int                // golden board revision the template was painted from (0 = design layers)
 }
 
 // alignState is the alignment state of the detection as the pages show it.
@@ -96,6 +101,10 @@ func (p *DefectPanel) AlignState() alignState {
 	if p.alignOut == nil || p.alignOut.Rev != flow.Rev {
 		return alignWorking
 	}
+	// The template follows the golden board: a changed board is aligned to again.
+	if g := p.a.goldenBoard(); g != nil && g.Ready() && p.alignOut.GoldenRev != g.Rev() {
+		return alignWorking
+	}
 	if p.alignOut.Usable {
 		return alignDone
 	}
@@ -110,11 +119,14 @@ func (p *DefectPanel) AlignedImage() *core.GrayImage {
 	return p.aligned
 }
 
-// InspectBlocked reports whether the taught alignment is required but not usable, so the
-// inspection must not run.
+// InspectBlocked reports whether the taught alignment is required but not usable, or the golden
+// board is not built yet, so the inspection must not run.
 func (p *DefectPanel) InspectBlocked() bool {
 	if p == nil {
 		return false
+	}
+	if g := p.a.goldenBoard(); g != nil && (!g.Ready() || g.Empty()) {
+		return true
 	}
 	flow := p.a.alignFlow()
 	return flow != nil && flow.Required() && p.AlignState() != alignDone
@@ -166,7 +178,7 @@ func (p *DefectPanel) RequestCapture() {
 // capture, the pixels the alignment had no data for are marked so the inspection ignores them
 // instead of judging the replicated border.
 func (p *DefectPanel) testRegions(scene *Scene) inspect.Regions {
-	reg := inspectRegions(scene)
+	reg := p.a.inspectRegionsFor(scene)
 	if out := p.alignOut; out != nil && out.Usable && p.aligned != nil && p.test == p.aligned {
 		reg.Skip = out.NoData
 	}

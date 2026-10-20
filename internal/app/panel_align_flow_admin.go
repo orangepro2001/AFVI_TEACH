@@ -170,11 +170,12 @@ func (p *AlignFlowPanel) drawAdminRight() {
 	)
 	KVTable("roi-info", rows)
 
-	for _, r := range out.Report.Reasons {
-		Warn(r.Message)
+	drawn := 0
+	if flow != nil {
+		drawn = len(flow.Rois)
 	}
-	if out.Err != "" {
-		Warn(out.Err)
+	if text := explainAlign(out, drawn); text != "" {
+		Warn(text)
 	}
 
 	headers := []string{

@@ -62,10 +62,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # --- 3. config, core and inspect tests (pure Go, CGO_ENABLED has no effect) --
-Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/...'
-& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/...
+Write-Host '==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... ./internal/golden/...'
+& go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... ./internal/golden/...
 if ($LASTEXITCODE -ne 0) {
-    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... failed.'
+    Write-Error 'go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... ./internal/golden/... failed.'
     exit 1
 }
 

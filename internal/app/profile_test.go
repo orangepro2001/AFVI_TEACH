@@ -39,8 +39,12 @@ func newTestApp(t *testing.T, p Profile) *App {
 	a.Scene = scene
 	a.Viewer.noGL = true // no OpenGL context in the headless tests
 	a.align.modelLoaded(scene)
+	a.golden.modelLoaded(scene)
 	if dp := defectPanelOf(a); dp != nil {
 		dp.ModelLoaded()
+	}
+	if a.golden != nil {
+		pollJobs(t, a) // the golden board builds its regions
 	}
 	return a
 }
@@ -69,8 +73,8 @@ func TestProfilePanels(t *testing.T) {
 	for _, p := range teach.panels {
 		teachIDs = append(teachIDs, p.ID())
 	}
-	if strings.Join(teachIDs, ",") != "roi,align,defect" {
-		t.Errorf("teach panel ids = %v, want [roi align defect]", teachIDs)
+	if strings.Join(teachIDs, ",") != "roi,align,golden,defect" {
+		t.Errorf("teach panel ids = %v, want [roi align golden defect]", teachIDs)
 	}
 	tdp := defectPanelOf(teach)
 	if tdp == nil {

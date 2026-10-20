@@ -39,13 +39,7 @@ type Result struct {
 // (core.DefaultCaptureWarp). The good sample stays at the nominal position because Render always
 // renders it un-warped; only the test image moves.
 func DefaultRecipe(scene *model.Scene, count int, seed uint32) snap.Recipe {
-	light := core.DefaultLightSetting()
-	light.Channels = []core.LightChannel{
-		{Color: core.LightRed, Value: 512, Enable: true},
-		{Color: core.LightGreen, Value: 512, Enable: true},
-		{Color: core.LightBlue, Value: 512, Enable: true},
-		{Color: core.LightWhite, Value: 0, Enable: false},
-	}
+	light := core.DefaultCaptureLight()
 	product := core.DefaultProductOptions()
 	noise := core.SensorNoise{Seed: 1}
 	var defects []core.DefectStroke

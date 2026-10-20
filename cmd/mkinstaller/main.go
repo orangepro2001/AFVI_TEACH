@@ -68,6 +68,7 @@ func run(root, bin, stub, out, version, reference string) error {
 		"docs/MANUAL.md":          filepath.Join(root, "docs", "MANUAL.md"),
 		"docs/USAGE.md":           filepath.Join(root, "docs", "USAGE.md"),
 		"docs/ROLES.md":           filepath.Join(root, "docs", "ROLES.md"),
+		"docs/GOLDEN.md":          filepath.Join(root, "docs", "GOLDEN.md"),
 		"docs/LINK.md":            filepath.Join(root, "docs", "LINK.md"),
 		"docs/INSPECT_RULES.md":   filepath.Join(root, "docs", "INSPECT_RULES.md"),
 		"docs/SCENARIO.md":        filepath.Join(root, "docs", "SCENARIO.md"),

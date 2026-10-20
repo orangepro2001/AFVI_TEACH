@@ -10,10 +10,11 @@ import (
 
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/inspect"
+	snapfmt "afvi/teach-imgui/internal/snap"
 )
 
 func init() {
-	registerPanel(3, func(a *App) Panel { return newDefectPanel(a, modeDetect) }, ProfileTeach)
+	registerPanel(4, func(a *App) Panel { return newDefectPanel(a, modeDetect) }, ProfileTeach)
 	registerPanel(1, func(a *App) Panel { return newDefectPanel(a, modeAuthor) }, ProfileStudio)
 	Messages(map[string]string{
 		"defect.section.channel":           "渲染通道",
@@ -540,6 +541,7 @@ type DefectPanel struct {
 	inspectParams [3]inspect.Params // 每个相机通道一套检出参数
 	learned       [3]bool           // 该通道是否已学习过区间
 	relearn       bool              // 下一次运行强制重新学习当前通道
+	goldenRev     int               // 上次学习/检出所用金板的 Rev（金板变了就重新学习区间）
 	learnK        float64           // 学习区间 = 均值 ± k·σ
 
 	randomCount     int
@@ -650,7 +652,7 @@ func newDefectPanel(a *App, mode defectMode) *DefectPanel {
 		p.warp = core.DefaultCaptureWarp()
 	}
 	for i := range p.inspectParams {
-		p.inspectParams[i] = newInspectParams()
+		p.inspectParams[i] = p.freshParams()
 	}
 	return p
 }
@@ -711,7 +713,7 @@ func (p *DefectPanel) ModelLoaded() {
 	p.imgMsg = statusMsg{}
 	p.inspectNow = false
 	for i := range p.inspectParams {
-		p.inspectParams[i] = newInspectParams()
+		p.inspectParams[i] = p.freshParams()
 	}
 	if p.frame != nil {
 		p.frame.Reset()
@@ -737,7 +739,7 @@ func (p *DefectPanel) LightChanged() {
 
 // resetInspect 把当前通道的检出参数恢复默认，并在下一次运行时重新学习区间。
 func (p *DefectPanel) resetInspect() {
-	p.inspectParams[p.channel] = newInspectParams()
+	p.inspectParams[p.channel] = p.freshParams()
 	p.learned[p.channel] = false
 }
 
@@ -875,6 +877,22 @@ func (p *DefectPanel) requestRun() {
 	noise := p.noise
 	warp := p.warp
 	params := p.inspectParams[ch]
+	// The inspected area is the golden board's mask once it is built (the design layers
+	// otherwise); a changed board changes the statistics, so the intervals are learned again.
+	regions := a.inspectRegionsFor(scene)
+	goldenBlocked := false
+	var tplClasses []uint8 // the alignment template is painted from the golden board once it is built
+	tplGoldenRev := 0
+	if g := a.goldenBoard(); g != nil {
+		goldenBlocked = !g.Ready() || g.Empty()
+		if !goldenBlocked {
+			tplClasses, tplGoldenRev = g.Derived().classes, g.Rev()
+			if p.goldenRev != g.Rev() {
+				p.goldenRev = g.Rev()
+				p.learned = [3]bool{}
+			}
+		}
+	}
 	// Whether a learn is due is decided on the UI thread; the job drops it when the alignment
 	// blocks the inspection, but the good sample is fetched for it up front.
 	learnWanted := doInspect && (!p.learned[ch] || p.relearn)
@@ -891,6 +909,13 @@ func (p *DefectPanel) requestRun() {
 	srcDir := p.snapSrc.srcDir
 	workDir := p.snapSrc.workDir
 	snapMeta := p.snapSrc.meta
+	// The template and the nominal image must be rendered with the light the capture was
+	// taken with; a Load Image has an unknown light, so the app light is used.
+	var capMeta *snapfmt.Meta
+	if userImg == nil && (liveOn || snapOn) {
+		capMeta = snapMeta
+	}
+	tplLight := alignTemplateLight(light, capMeta)
 	have := make(map[snapKey]*core.GrayImage, len(p.snapSrc.frames))
 	for k, v := range p.snapSrc.frames {
 		have[k] = v
@@ -928,14 +953,26 @@ func (p *DefectPanel) requestRun() {
 		var nominal *core.GrayImage
 		if armed && raw != nil {
 			tplDirty := tpl == nil || tpl.scene != scene || tpl.ch != ch ||
-				tpl.scale != al.Scale || !reflect.DeepEqual(tpl.light, light)
+				tpl.scale != al.Scale || tpl.goldenRev != tplGoldenRev || !reflect.DeepEqual(tpl.light, tplLight)
 			if tplDirty {
-				nominal = core.RenderChannel(scene.Light, &light, ch)
-				img, _, terr := core.DesignTemplate(scene.Material, nominal, al.Scale)
-				if terr != nil {
-					out = &AlignOutcome{Rev: al.Rev, Err: terr.Error()}
+				nominal = core.RenderChannel(scene.Light, &tplLight, ch)
+				var img *core.GrayImage
+				var terr error
+				if tplClasses != nil {
+					img, terr = core.PaintedTemplate(tplClasses, nominal, al.Scale)
 				} else {
-					tpl = &alignTemplate{scene: scene, ch: ch, light: light, scale: al.Scale, img: img}
+					img, _, terr = core.DesignTemplate(scene.Material, nominal, al.Scale)
+				}
+				if terr != nil {
+					out = &AlignOutcome{
+						Rev:       al.Rev,
+						Err:       terr.Error(),
+						Channel:   ch,
+						RawFlat:   imageFlat(raw),
+						GoldenRev: tplGoldenRev,
+					}
+				} else {
+					tpl = &alignTemplate{scene: scene, ch: ch, light: tplLight, scale: al.Scale, goldenRev: tplGoldenRev, img: img}
 				}
 			}
 			if out == nil {
@@ -951,6 +988,10 @@ func (p *DefectPanel) requestRun() {
 						Image:     ca.Image,
 						NoData:    ca.NoData,
 						ElapsedMs: ca.ElapsedMs,
+						Channel:   ch,
+						TplFlat:   imageFlat(tpl.img),
+						RawFlat:   imageFlat(raw),
+						GoldenRev: tplGoldenRev,
 					}
 					if aerr != nil {
 						out.Err = aerr.Error()
@@ -964,7 +1005,7 @@ func (p *DefectPanel) requestRun() {
 				test = aligned
 			}
 		}
-		blocked := required && !(armed && out != nil && out.Usable)
+		blocked := (required && !(armed && out != nil && out.Usable)) || goldenBlocked
 		doInspect = doInspect && !blocked
 		needLearn := learnWanted && !blocked
 		if needLearn {
@@ -982,7 +1023,7 @@ func (p *DefectPanel) requestRun() {
 			} else {
 				good = core.RenderGoodSample(scene.Light, &light, ch, goodSampleNoise(noise))
 			}
-			learnedParams, err := inspect.Learn(inspectImage(good), inspectRegions(scene), k, params)
+			learnedParams, err := inspect.Learn(inspectImage(good), regions, k, params)
 			if err != nil {
 				return func() { a.SetHint(T("common.error", "msg", err.Error())) }
 			}
@@ -991,7 +1032,7 @@ func (p *DefectPanel) requestRun() {
 		var report inspect.Report
 		if doInspect {
 			var err error
-			reg := inspectRegions(scene)
+			reg := regions
 			if out != nil && aligned != nil && test == aligned {
 				reg.Skip = out.NoData // no data at the border the alignment shift opened: not inspected
 			}
@@ -1003,7 +1044,7 @@ func (p *DefectPanel) requestRun() {
 		// The golden image must be on the same grid as the aligned test image (rule 5).
 		if armed && aligned != nil && test == aligned && golden != nil {
 			if nominal == nil {
-				nominal = core.RenderChannel(scene.Light, &light, ch)
+				nominal = core.RenderChannel(scene.Light, &tplLight, ch)
 			}
 			golden = nominal
 		}
@@ -1542,13 +1583,11 @@ func (p *DefectPanel) alignReason() string {
 	if p.alignOut == nil {
 		return ""
 	}
-	if p.alignOut.Err != "" {
-		return p.alignOut.Err
+	drawn := 0
+	if f := p.a.alignFlow(); f != nil {
+		drawn = len(f.Rois)
 	}
-	if len(p.alignOut.Report.Reasons) > 0 {
-		return p.alignOut.Report.Reasons[0].Message
-	}
-	return ""
+	return explainAlign(p.alignOut, drawn)
 }
 
 // drawAlignStatus shows the alignment state of the panel (one line) in the teach tab.

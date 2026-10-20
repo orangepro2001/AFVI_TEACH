@@ -55,6 +55,8 @@ func (a *App) ApplyProduct(opts core.ProductOptions) {
 			next.Light = light
 			next.Product = opts
 			a.Scene = &next
+			// The golden sample picture is rendered from the baked product, so the board starts over.
+			a.golden.modelLoaded(a.Scene)
 			a.NotifyLightChanged()
 		}
 	})

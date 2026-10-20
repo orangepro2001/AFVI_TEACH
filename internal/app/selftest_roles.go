@@ -57,6 +57,9 @@ func (s *Selftest) legacyStep() selftestStep {
 		enter: func(a *App) {
 			s.flow = s.a.align
 			s.a.align = nil
+			// The golden board is detached too: the older steps inspect against the design layers.
+			s.golden = s.a.golden
+			s.a.golden = nil
 			if dp := defectPanelOf(s.a); dp != nil {
 				dp.warp = core.IdentityWarp
 				dp.renderRev++
@@ -78,6 +81,7 @@ func (s *Selftest) flowSteps() []selftestStep {
 				a.theme = ThemeDark
 				SetLang(LangZh)
 				a.align = s.flow
+				a.golden = s.golden
 				a.align.ResetRois()
 				dp := defectPanelOf(a)
 				dp.warp = core.DefaultCaptureWarp()
@@ -209,6 +213,84 @@ func (s *Selftest) flowSteps() []selftestStep {
 			},
 		},
 		{
+			name: "flow-channel-green",
+			enter: func(a *App) {
+				dp := defectPanelOf(a)
+				dp.SetChannel(core.ChGreen)
+				dp.RequestCapture()
+			},
+			shot: "native-roi-aligned-green-zh.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := defectPanelOf(s.a)
+				out := dp.AlignOutcome()
+				if st := dp.AlignState(); st != alignDone {
+					return nil, fmt.Errorf("flow-channel-green: align state %s on channel green, want done: %s", st.key(), explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out == nil || !out.Usable {
+					return nil, fmt.Errorf("flow-channel-green: no usable alignment outcome on channel green: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.Channel != core.ChGreen {
+					return nil, fmt.Errorf("flow-channel-green: outcome channel %v, want green: %s", out.Channel, explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.TplFlat {
+					return nil, fmt.Errorf("flow-channel-green: the design template of channel green is flat: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.RawFlat {
+					return nil, fmt.Errorf("flow-channel-green: the capture of channel green is flat: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if dp.Report() == nil {
+					return nil, fmt.Errorf("flow-channel-green: no report on channel green: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				located := 0
+				for _, m := range out.Report.Matches {
+					if m.Located {
+						located++
+					}
+				}
+				return map[string]any{"channel": "green", "located": located, "elapsedMs": out.ElapsedMs}, nil
+			},
+		},
+		{
+			name: "flow-channel-blue",
+			enter: func(a *App) {
+				dp := defectPanelOf(a)
+				dp.SetChannel(core.ChBlue)
+				dp.RequestCapture()
+			},
+			shot: "native-roi-aligned-blue-zh.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				dp := defectPanelOf(s.a)
+				out := dp.AlignOutcome()
+				if st := dp.AlignState(); st != alignDone {
+					return nil, fmt.Errorf("flow-channel-blue: align state %s on channel blue, want done: %s", st.key(), explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out == nil || !out.Usable {
+					return nil, fmt.Errorf("flow-channel-blue: no usable alignment outcome on channel blue: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.Channel != core.ChBlue {
+					return nil, fmt.Errorf("flow-channel-blue: outcome channel %v, want blue: %s", out.Channel, explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.TplFlat {
+					return nil, fmt.Errorf("flow-channel-blue: the design template of channel blue is flat: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out.RawFlat {
+					return nil, fmt.Errorf("flow-channel-blue: the capture of channel blue is flat: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				if dp.Report() == nil {
+					return nil, fmt.Errorf("flow-channel-blue: no report on channel blue: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				located := 0
+				for _, m := range out.Report.Matches {
+					if m.Located {
+						located++
+					}
+				}
+				dp.SetChannel(core.ChRed)
+				dp.RequestCapture()
+				return map[string]any{"channel": "blue", "located": located, "elapsedMs": out.ElapsedMs}, nil
+			},
+		},
+		{
 			name: "flow-edit",
 			enter: func(a *App) {
 				a.align.SetRois(a.align.Rois[1:])
@@ -264,8 +346,8 @@ func (s *Selftest) roleSteps() []selftestStep {
 			shot: "native-operator-align-zh.png",
 			check: func(s *Selftest) (map[string]any, error) {
 				idsOperator = pageIDs(s.a)
-				if idsOperator != "op-align,op-inspect" {
-					return nil, fmt.Errorf("roles-operator: visible pages %q, want op-align,op-inspect", idsOperator)
+				if idsOperator != "op-align,golden,op-inspect" {
+					return nil, fmt.Errorf("roles-operator: visible pages %q, want op-align,golden,op-inspect", idsOperator)
 				}
 				if s.a.Role() != access.RoleOperator {
 					return nil, fmt.Errorf("roles-operator: role %v, want operator", s.a.Role())
@@ -324,6 +406,65 @@ func (s *Selftest) roleSteps() []selftestStep {
 					return nil, fmt.Errorf("roles-confirm: detection is still blocked after the Confirm")
 				}
 				return nil, nil
+			},
+		},
+		s.goldenOperatorStep(),
+		{
+			name: "roles-flat-channel",
+			enter: func(a *App) {
+				a.Light = core.DefaultLightSetting()
+				dp := defectPanelOf(a)
+				dp.SetChannel(core.ChGreen)
+				dp.RequestCapture()
+			},
+			shot: "native-operator-flat-channel-zh.png",
+			check: func(s *Selftest) (map[string]any, error) {
+				defer func() {
+					s.a.Light = core.DefaultCaptureLight()
+					defectPanelOf(s.a).SetChannel(core.ChRed)
+					defectPanelOf(s.a).RequestCapture()
+				}()
+				dp := defectPanelOf(s.a)
+				out := dp.AlignOutcome()
+				if st := dp.AlignState(); st != alignFailed {
+					return nil, fmt.Errorf("roles-flat-channel: align state %s, want failed: %s", st.key(), explainAlign(out, len(s.a.align.Rois)))
+				}
+				if out == nil {
+					return nil, fmt.Errorf("roles-flat-channel: no alignment outcome")
+				}
+				if out.Channel != core.ChGreen {
+					return nil, fmt.Errorf("roles-flat-channel: outcome channel %v, want green", out.Channel)
+				}
+				if !out.TplFlat {
+					return nil, fmt.Errorf("roles-flat-channel: the design template of channel green is not flat: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				for _, m := range out.Report.Matches {
+					if m.Located {
+						return nil, fmt.Errorf("roles-flat-channel: ROI %q was located although the channel has no light", m.Name)
+					}
+				}
+				if !dp.InspectBlocked() {
+					return nil, fmt.Errorf("roles-flat-channel: detection is not blocked after the failed alignment: %s", explainAlign(out, len(s.a.align.Rois)))
+				}
+				fp, _ := s.a.panelByID("op-align").(*AlignFlowPanel)
+				if fp == nil {
+					return nil, fmt.Errorf("roles-flat-channel: the op-align page is not an alignment panel")
+				}
+				want := explainAlign(out, len(s.a.align.Rois))
+				text := fp.reason()
+				if text != want {
+					return nil, fmt.Errorf("roles-flat-channel: reason %q, want %q", text, want)
+				}
+				if !strings.Contains(text, T("alignx.ch.green")) {
+					return nil, fmt.Errorf("roles-flat-channel: reason %q does not name the green channel", text)
+				}
+				if !strings.Contains(text, T("alignx.hintLight")) {
+					return nil, fmt.Errorf("roles-flat-channel: reason %q does not carry the light hint", text)
+				}
+				if strings.Contains(text, "alignx.") {
+					return nil, fmt.Errorf("roles-flat-channel: reason %q contains a raw translation key", text)
+				}
+				return map[string]any{"channel": "green", "boxes": len(s.a.align.Rois), "text": text}, nil
 			},
 		},
 		{
@@ -392,8 +533,8 @@ func (s *Selftest) roleSteps() []selftestStep {
 				if s.a.Role() != access.RoleAdmin {
 					return nil, fmt.Errorf("roles-login: role %v, want admin", s.a.Role())
 				}
-				if ids := pageIDs(s.a); ids != "roi,align,defect" {
-					return nil, fmt.Errorf("roles-login: admin pages %q, want roi,align,defect", ids)
+				if ids := pageIDs(s.a); ids != "roi,align,golden,defect" {
+					return nil, fmt.Errorf("roles-login: admin pages %q, want roi,align,golden,defect", ids)
 				}
 				if s.a.PageVisible("op-align") || s.a.PageVisible("op-inspect") {
 					return nil, fmt.Errorf("roles-login: an operator page is visible to the admin")

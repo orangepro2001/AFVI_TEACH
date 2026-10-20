@@ -156,7 +156,8 @@ type App struct {
 
 	live *liveLink // the live link to the other program (nil = off)
 
-	align *AlignFlow // taught alignment of the loaded model (teach program only, nil in the studio)
+	align  *AlignFlow   // taught alignment of the loaded model (teach program only, nil in the studio)
+	golden *goldenBoard // golden board of the loaded model: the inspection area (teach program only, nil in the studio)
 }
 
 // NewApp builds the app state and panels; the window/backend is attached by main. The
@@ -168,15 +169,18 @@ func NewApp(cfg *config.Config, cfgPath string, theme string, profile Profile) *
 		CfgPath:  cfgPath,
 		modelIdx: -1,
 		profile:  profile,
-		Light:    core.DefaultLightSetting(),
+		Light:    core.DefaultCaptureLight(),
 		Viewer:   NewViewer(),
 		theme:    theme,
 		start:    time.Now(),
 		timings:  map[string][]float64{},
 	}
 	a.Jobs = NewJobs(func(err error) { a.SetHint(T("common.error", "msg", err.Error())) })
+	// Both programs start with the light a real capture is taken with: red, green and blue
+	// all lit, so every channel has contrast (alignment templates, inspection parameters).
 	if profile == ProfileTeach {
 		a.align = newAlignFlow(a)
+		a.golden = newGoldenBoard(a)
 	}
 	sort.SliceStable(panelCtors, func(i, j int) bool { return panelCtors[i].order < panelCtors[j].order })
 	for _, c := range panelCtors {
@@ -454,6 +458,7 @@ func (a *App) LoadModel(i int) {
 			a.Scene = scene
 			a.Viewer.Clear()
 			a.align.modelLoaded(scene)
+			a.golden.modelLoaded(scene)
 			for _, p := range a.allPanels {
 				p.ModelLoaded()
 			}

@@ -29,6 +29,16 @@ func newInspectParams() inspect.Params {
 	return p
 }
 
+// freshParams is the default Inspect configuration of this panel. With a golden board the mask
+// itself keeps the inspection away from the edges (its padding), so the edge margin is 0.
+func (p *DefectPanel) freshParams() inspect.Params {
+	prm := newInspectParams()
+	if p.a != nil && p.a.golden != nil {
+		prm.EdgeMargin = 0
+	}
+	return prm
+}
+
 // interiorSR reports whether the whole (2r+1)×(2r+1) window around (x,y) lies inside the
 // image and every material value in it equals core.MatSR.
 func interiorSR(scene *Scene, x, y, r int) bool {

@@ -7,9 +7,11 @@ import (
 )
 
 // legacyDetect turns the forced alignment off on a teach app, restoring the behaviour of the
-// pipeline before AlignFlow existed (the detect run renders and inspects the raw capture).
+// pipeline before AlignFlow and the golden board existed (the detect run renders and inspects
+// the raw capture against the design layers).
 func legacyDetect(a *App) {
 	a.align = nil
+	a.golden = nil
 }
 
 // pipelineRois returns two ROIs on the corners of the synthetic model's SR rectangle (x 36..92,

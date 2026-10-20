@@ -11,75 +11,87 @@ import (
 )
 
 func init() {
-	registerPanelFor([]access.Role{access.RoleOperator}, 2, func(a *App) Panel {
+	registerPanelFor([]access.Role{access.RoleOperator}, 4, func(a *App) Panel {
 		return &OpInspectPanel{a: a, selected: -1}
 	}, ProfileTeach)
 	Messages(map[string]string{
-		"tab.opInspect":       "检测",
-		"opInspect.title":     "检测",
-		"opInspect.blocked":   "还没有完成对位，不能检测。请先到“对位”页确认对位。",
-		"opInspect.toAlign":   "去对位…",
-		"opInspect.run":       "检测",
-		"opInspect.ok":        "OK 合格",
-		"opInspect.ng":        "NG 不合格",
-		"opInspect.press":     "按“检测”开始。",
-		"opInspect.bright":    "过亮",
-		"opInspect.dark":      "过暗",
-		"opInspect.noPanel":   "缺陷检出没有初始化。",
-		"opInspect.hint":      "只检测对位后的图片；检出框显示在视图上。",
-		"opInspect.count":     "缺陷数",
-		"opInspect.flagged":   "越界像素",
-		"opInspect.elapsed":   "对位耗时",
-		"opInspect.channel":   "通道",
-		"opInspect.results":   "最大的缺陷",
-		"opInspect.emptyList": "没有检出缺陷。",
-		"opInspect.col.mat":   "材质",
-		"opInspect.col.pol":   "极性",
-		"opInspect.col.area":  "面积",
+		"tab.opInspect":           "检测",
+		"opInspect.title":         "检测",
+		"opInspect.blocked":       "还没有完成对位，不能检测。请先到“对位”页确认对位。",
+		"opInspect.toAlign":       "去对位…",
+		"opInspect.goldenBusy":    "金板还在生成，请稍候，或到“金板”页查看。",
+		"opInspect.toGolden":      "去金板…",
+		"opInspect.goldenUnsaved": "金板还没有保存确认，当前检查区域来自自动生成或未保存的金板。",
+		"opInspect.goldenEmpty":   "金板的检查区域是空的（没有任何要检查的像素），不能检测。请到“金板”页重新生成或补画遮罩。",
+		"opInspect.run":           "检测",
+		"opInspect.ok":            "OK 合格",
+		"opInspect.ng":            "NG 不合格",
+		"opInspect.press":         "按“检测”开始。",
+		"opInspect.bright":        "过亮",
+		"opInspect.dark":          "过暗",
+		"opInspect.noPanel":       "缺陷检出没有初始化。",
+		"opInspect.hint":          "只检测对位后的图片；检出框显示在视图上。",
+		"opInspect.count":         "缺陷数",
+		"opInspect.flagged":       "越界像素",
+		"opInspect.elapsed":       "对位耗时",
+		"opInspect.channel":       "通道",
+		"opInspect.results":       "最大的缺陷",
+		"opInspect.emptyList":     "没有检出缺陷。",
+		"opInspect.col.mat":       "材质",
+		"opInspect.col.pol":       "极性",
+		"opInspect.col.area":      "面积",
 	}, map[string]string{
-		"tab.opInspect":       "Inspect",
-		"opInspect.title":     "Inspection",
-		"opInspect.blocked":   "Alignment is not confirmed yet, so inspection is disabled. Confirm the alignment on the Align page first.",
-		"opInspect.toAlign":   "Go to Align…",
-		"opInspect.run":       "Inspect",
-		"opInspect.ok":        "OK PASS",
-		"opInspect.ng":        "NG FAIL",
-		"opInspect.press":     "Press \"Inspect\" to start.",
-		"opInspect.bright":    "Bright",
-		"opInspect.dark":      "Dark",
-		"opInspect.noPanel":   "The defect panel is not available.",
-		"opInspect.hint":      "Only the aligned picture is inspected; detected boxes are drawn on the view.",
-		"opInspect.count":     "Defects",
-		"opInspect.flagged":   "Flagged pixels",
-		"opInspect.elapsed":   "Align time",
-		"opInspect.channel":   "Channel",
-		"opInspect.results":   "Largest defects",
-		"opInspect.emptyList": "No defects detected.",
-		"opInspect.col.mat":   "Material",
-		"opInspect.col.pol":   "Polarity",
-		"opInspect.col.area":  "Area",
+		"tab.opInspect":           "Inspect",
+		"opInspect.title":         "Inspection",
+		"opInspect.blocked":       "Alignment is not confirmed yet, so inspection is disabled. Confirm the alignment on the Align page first.",
+		"opInspect.toAlign":       "Go to Align…",
+		"opInspect.goldenBusy":    "The golden board is still being built. Wait a moment or open the Golden Board page.",
+		"opInspect.toGolden":      "Go to Golden Board…",
+		"opInspect.goldenUnsaved": "The golden board is not saved yet; the inspection area is the automatic or unsaved board.",
+		"opInspect.goldenEmpty":   "The inspection area of the golden board is empty (no pixel to inspect), so detection is blocked. Regenerate or redraw the mask on the Golden Board page.",
+		"opInspect.run":           "Inspect",
+		"opInspect.ok":            "OK PASS",
+		"opInspect.ng":            "NG FAIL",
+		"opInspect.press":         "Press \"Inspect\" to start.",
+		"opInspect.bright":        "Bright",
+		"opInspect.dark":          "Dark",
+		"opInspect.noPanel":       "The defect panel is not available.",
+		"opInspect.hint":          "Only the aligned picture is inspected; detected boxes are drawn on the view.",
+		"opInspect.count":         "Defects",
+		"opInspect.flagged":       "Flagged pixels",
+		"opInspect.elapsed":       "Align time",
+		"opInspect.channel":       "Channel",
+		"opInspect.results":       "Largest defects",
+		"opInspect.emptyList":     "No defects detected.",
+		"opInspect.col.mat":       "Material",
+		"opInspect.col.pol":       "Polarity",
+		"opInspect.col.area":      "Area",
 	}, map[string]string{
-		"tab.opInspect":       "검사",
-		"opInspect.title":     "검사",
-		"opInspect.blocked":   "정렬이 확인되지 않아 검사할 수 없습니다. 먼저 정렬 페이지에서 정렬을 확인하세요.",
-		"opInspect.toAlign":   "정렬로 이동…",
-		"opInspect.run":       "검사",
-		"opInspect.ok":        "OK 합격",
-		"opInspect.ng":        "NG 불합격",
-		"opInspect.press":     "\"검사\"를 눌러 시작하세요.",
-		"opInspect.bright":    "과밝음",
-		"opInspect.dark":      "과어두움",
-		"opInspect.noPanel":   "결함 패널을 사용할 수 없습니다.",
-		"opInspect.hint":      "정렬된 이미지만 검사하며, 검출 상자는 뷰에 표시됩니다.",
-		"opInspect.count":     "결함 수",
-		"opInspect.flagged":   "범위 밖 픽셀",
-		"opInspect.elapsed":   "정렬 소요",
-		"opInspect.channel":   "채널",
-		"opInspect.results":   "가장 큰 결함",
-		"opInspect.emptyList": "검출된 결함이 없습니다.",
-		"opInspect.col.mat":   "재질",
-		"opInspect.col.pol":   "극성",
-		"opInspect.col.area":  "면적",
+		"tab.opInspect":           "검사",
+		"opInspect.title":         "검사",
+		"opInspect.blocked":       "정렬이 확인되지 않아 검사할 수 없습니다. 먼저 정렬 페이지에서 정렬을 확인하세요.",
+		"opInspect.toAlign":       "정렬로 이동…",
+		"opInspect.goldenBusy":    "골든 보드를 만드는 중입니다. 잠시 기다리거나 골든 보드 페이지를 확인하세요.",
+		"opInspect.toGolden":      "골든 보드로 이동…",
+		"opInspect.goldenUnsaved": "골든 보드가 아직 저장되지 않았습니다. 검사 영역은 자동 생성되었거나 저장되지 않은 보드입니다.",
+		"opInspect.goldenEmpty":   "골든 보드의 검사 영역이 비어 있어(검사할 픽셀 없음) 검출할 수 없습니다. 골든 보드 페이지에서 마스크를 다시 생성하거나 그리세요.",
+		"opInspect.run":           "검사",
+		"opInspect.ok":            "OK 합격",
+		"opInspect.ng":            "NG 불합격",
+		"opInspect.press":         "\"검사\"를 눌러 시작하세요.",
+		"opInspect.bright":        "과밝음",
+		"opInspect.dark":          "과어두움",
+		"opInspect.noPanel":       "결함 패널을 사용할 수 없습니다.",
+		"opInspect.hint":          "정렬된 이미지만 검사하며, 검출 상자는 뷰에 표시됩니다.",
+		"opInspect.count":         "결함 수",
+		"opInspect.flagged":       "범위 밖 픽셀",
+		"opInspect.elapsed":       "정렬 소요",
+		"opInspect.channel":       "채널",
+		"opInspect.results":       "가장 큰 결함",
+		"opInspect.emptyList":     "검출된 결함이 없습니다.",
+		"opInspect.col.mat":       "재질",
+		"opInspect.col.pol":       "극성",
+		"opInspect.col.area":      "면적",
 	})
 }
 
@@ -165,6 +177,20 @@ func (p *OpInspectPanel) DrawLeft() {
 	imgui.TextUnformatted(T("opInspect.title"))
 
 	if dp.InspectBlocked() {
+		if g := p.a.goldenBoard(); g != nil && !g.Ready() && dp.AlignState() == alignDone {
+			Warn(T("opInspect.goldenBusy"))
+			if ButtonSized(T("opInspect.toGolden"), "op-togolden", imgui.NewVec2(ButtonWidth(T("opInspect.toGolden")), sc(44)), true) {
+				p.a.ShowPage(goldenPageID)
+			}
+			return
+		}
+		if g := p.a.goldenBoard(); g.Empty() && dp.AlignState() == alignDone {
+			Warn(T("opInspect.goldenEmpty"))
+			if ButtonSized(T("opInspect.toGolden"), "op-togolden", imgui.NewVec2(ButtonWidth(T("opInspect.toGolden")), sc(44)), true) {
+				p.a.ShowPage(goldenPageID)
+			}
+			return
+		}
 		Warn(T("opInspect.blocked"))
 		if ButtonSized(T("opInspect.toAlign"), "op-toalign", imgui.NewVec2(ButtonWidth(T("opInspect.toAlign")), sc(44)), true) {
 			p.a.ShowPage("op-align")
@@ -211,6 +237,9 @@ func (p *OpInspectPanel) DrawLeft() {
 	}
 	KVTable("op-kv", rows)
 	Note(T("opInspect.hint"))
+	if g := p.a.goldenBoard(); g != nil && !g.Confirmed() {
+		Warn(T("opInspect.goldenUnsaved"))
+	}
 }
 
 // drawVerdictBanner 画一条占满面板宽度的大号 OK/NG 结论横幅。

@@ -120,7 +120,7 @@ git push origin v1.0.0
 
 可选：运行配置包与核心算法测试（纯 Go，无需交叉编译）
 ```bash
-go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...
+go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/golden/...
 ```
 
 相机模拟程序是纯 Go，可直接在 Linux 上原生构建与运行：

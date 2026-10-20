@@ -29,7 +29,7 @@ func liveSelftestStep(s *Selftest) selftestStep {
 			// Start from the default parameters: the earlier steps left their own intervals behind,
 			// and the first live run learns the intervals from the studio's good sample.
 			for i := range dp.inspectParams {
-				dp.inspectParams[i] = newInspectParams()
+				dp.inspectParams[i] = dp.freshParams()
 			}
 			dp.learned, dp.relearn = [3]bool{}, false
 			dp.liveFollow = true
@@ -59,7 +59,7 @@ func liveSelftestStep(s *Selftest) selftestStep {
 			if dp.snapStale() {
 				return nil, fmt.Errorf("live: a live source reported stale")
 			}
-			direct, err := inspect.Inspect(inspectImage(want), inspectRegions(s.a.Scene), dp.inspectParams[dp.channel])
+			direct, err := inspect.Inspect(inspectImage(want), s.a.inspectRegionsFor(s.a.Scene), dp.inspectParams[dp.channel])
 			if err != nil {
 				return nil, fmt.Errorf("live: %w", err)
 			}
