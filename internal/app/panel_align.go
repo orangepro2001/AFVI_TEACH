@@ -27,12 +27,20 @@ func init() {
 			config:    core.DefaultAlignConfig,
 			occValue:  0,
 			lastScale: 2,
+			tplSource: tplDesign,
 		}
 	}, ProfileTeach)
 	Messages(map[string]string{
 		"align.section.source":         "源图",
 		"align.source.median":          "MEDIAN 原图",
 		"align.source.light":           "当前光照渲染图",
+		"align.template":               "模板图",
+		"align.template.design":        "设计假想图（仅形状）",
+		"align.template.image":         "与源图相同（旧）",
+		"align.template.designNote":    "ROI 的模板从设计材料层生成的假想图上切取：没有真实纹理和噪声，只能靠形状去匹配，更接近实机。",
+		"align.template.imageNote":     "模板和输入是同一张图（只是扭曲了），ROI 画在哪里都能完美匹配，仅用于对照。",
+		"align.template.registered":    "假想图已与源图配准：整体偏移 ({dx}, {dy}) px，旋转 {deg}°（设计层与实拍图的固有差异）。",
+		"align.template.unregistered":  "假想图没能配准到源图（可用的匹配窗口不足），ROI 的位置会带着设计层与实拍图的固有偏差。",
 		"align.section.warp":           "扭曲参数",
 		"align.param.tx":               "tx",
 		"align.param.ty":               "ty",
@@ -119,6 +127,13 @@ func init() {
 		"align.section.source":         "Source",
 		"align.source.median":          "MEDIAN original",
 		"align.source.light":           "Current lighting render",
+		"align.template":               "Template",
+		"align.template.design":        "Design picture (shape only)",
+		"align.template.image":         "Same as source (old)",
+		"align.template.designNote":    "ROI templates are cut from an imagined picture made from the design material layers: no real texture or noise, matching can only use shapes, like on the machine.",
+		"align.template.imageNote":     "Template and input are the same picture (only warped), so any ROI matches perfectly; for comparison only.",
+		"align.template.registered":    "The design picture was registered to the source: overall shift ({dx}, {dy}) px, rotation {deg}° (the inherent difference between design layers and the real picture).",
+		"align.template.unregistered":  "The design picture could not be registered to the source (too few usable windows), so ROI positions carry the inherent offset between the design layers and the real picture.",
 		"align.section.warp":           "Warp Parameters",
 		"align.param.tx":               "tx",
 		"align.param.ty":               "ty",
@@ -205,6 +220,13 @@ func init() {
 		"align.section.source":         "소스",
 		"align.source.median":          "MEDIAN 원본",
 		"align.source.light":           "현재 조명 렌더링",
+		"align.template":               "템플릿",
+		"align.template.design":        "설계 가상 이미지 (형상만)",
+		"align.template.image":         "소스와 동일 (이전)",
+		"align.template.designNote":    "ROI 템플릿은 설계 재료 레이어로 생성한 가상 이미지에서 잘라냅니다. 실제 텍스처나 노이즈가 없어 형상만으로 매칭하므로 실기기에 더 가깝습니다.",
+		"align.template.imageNote":     "템플릿과 입력이 같은 이미지(왜곡만 적용)이므로 어떤 ROI 도 완벽하게 매칭됩니다. 비교용으로만 사용하십시오.",
+		"align.template.registered":    "가상 이미지가 소스에 정합되었습니다. 전체 이동 ({dx}, {dy}) px, 회전 {deg}° (설계 레이어와 실사 이미지의 고유 차이).",
+		"align.template.unregistered":  "가상 이미지를 소스에 정합하지 못했습니다(사용 가능한 매칭 창이 부족함). 따라서 ROI 위치에는 설계 레이어와 실사 이미지 사이의 고유한 어긋남이 남습니다.",
 		"align.section.warp":           "왜곡 파라미터",
 		"align.param.tx":               "tx",
 		"align.param.ty":               "ty",
@@ -298,6 +320,22 @@ const (
 	slowRunSeconds    = 5.0
 )
 
+const (
+	tplDesign = "design" // imagined picture built from the design material layers only (shape, no texture): the default
+	tplImage  = "image"  // the source picture itself: every ROI trivially matches (the old behaviour)
+)
+
+// designTemplate is the cached imagined picture for one (scene, source, scale, light, channel).
+type designTemplate struct {
+	scene   *Scene
+	source  string
+	scale   int
+	light   core.LightSetting  // only with source "light"
+	channel core.CameraChannel // only with source "light"
+	img     *core.GrayImage
+	info    core.DesignInfo
+}
+
 func defaultWarpParams() core.WarpParams {
 	return core.WarpParams{Scale: 1, Gain: 1}
 }
@@ -312,6 +350,7 @@ type AlignPanel struct {
 	tool      string // "none" | "roi" | "select" | "occlusion"
 	viewKind  string // "overlay" | "template" | "input" | "diff" | "aligned" | "alignedOverlay" | "alignedDiff"
 	source    string // "median" | "light"
+	tplSource string // tplDesign | tplImage
 	scale     int
 	params    core.WarpParams
 	config    core.AlignConfig
@@ -321,8 +360,11 @@ type AlignPanel struct {
 	active    bool
 	lastScale int
 
-	template *core.GrayImage
-	input    *core.GrayImage
+	template   *core.GrayImage
+	input      *core.GrayImage
+	reference  *core.GrayImage // the real un-warped picture (working resolution) the input was warped from; the whole-picture checks measure against it. The template itself with the "image" template
+	design     *designTemplate // cached imagined picture for the current (scene, source, scale, light)
+	designInfo core.DesignInfo // info of the design the shown template was built from
 
 	report       *core.AlignReport
 	truth        *core.TruthComparison
@@ -403,6 +445,9 @@ func (p *AlignPanel) ModelLoaded() {
 	p.heat = nil
 	p.template = nil
 	p.input = nil
+	p.reference = nil
+	p.design = nil
+	p.designInfo = core.DesignInfo{}
 	p.dirty = true
 }
 
@@ -463,13 +508,15 @@ func (p *AlignPanel) scaledRois() []core.AlignRoi {
 // alignKey is everything a report depends on. A report is stale when the panel's current inputs
 // differ from the ones it was computed from; a finished job must never mark newer edits clean.
 type alignKey struct {
-	params core.WarpParams
-	occs   []core.Occlusion
-	rois   []core.AlignRoi
-	scale  int
-	source string
-	config core.AlignConfig
-	light  core.LightSetting // only with source "light"
+	params  core.WarpParams
+	occs    []core.Occlusion
+	rois    []core.AlignRoi
+	scale   int
+	source  string
+	tpl     string
+	config  core.AlignConfig
+	light   core.LightSetting  // only with source "light"
+	channel core.CameraChannel // only with source "light"
 }
 
 // inputKey snapshots the current inputs (the slices are copied, so it can be kept).
@@ -480,11 +527,13 @@ func (p *AlignPanel) inputKey() alignKey {
 		rois:   cloneRois(p.rois),
 		scale:  p.scale,
 		source: p.source,
+		tpl:    p.tplSource,
 		config: p.config,
 	}
 	k.params.Occlusions = nil
 	if p.source == "light" {
 		k.light = p.a.Light.Clone()
+		k.channel = p.a.CameraChannel()
 	}
 	return k
 }
@@ -508,7 +557,10 @@ func (p *AlignPanel) requestRun(force bool) {
 	scale := p.scale
 	// Snapshot panel state: the job goroutine must not read panel fields.
 	template, input := p.template, p.input
+	reference := p.reference
 	source := p.source
+	tplSource := p.tplSource
+	cache := p.design
 	viewKind := p.viewKind
 	params := p.scaledParams()
 	rois := p.scaledRois()
@@ -522,6 +574,7 @@ func (p *AlignPanel) requestRun(force bool) {
 	regenerated := needWarp || template == nil
 	a.Jobs.Run("align", func() func() {
 		start := time.Now()
+		var newDesign *designTemplate
 		if regenerated {
 			var base *core.GrayImage
 			if source == "light" {
@@ -529,16 +582,38 @@ func (p *AlignPanel) requestRun(force bool) {
 			} else {
 				base = scene.Median
 			}
+			var inputBase *core.GrayImage
 			if scale > 1 {
 				down, err := core.DownsampleArea(base, scale)
 				if err != nil {
 					return func() { a.SetHint(T("common.error", "msg", err.Error())) }
 				}
-				template = down
+				inputBase = down
 			} else {
-				template = base.Clone()
+				inputBase = base.Clone()
 			}
-			input = core.ApplyWarp(template, &params, 1)
+			reference = inputBase
+			if tplSource == tplImage {
+				template = inputBase
+			} else {
+				reuse := cache != nil && cache.scene == scene && cache.source == source && cache.scale == scale &&
+					(source != "light" || (cache.channel == ch && reflect.DeepEqual(cache.light, light)))
+				if reuse {
+					template = cache.img
+				} else {
+					img, info, err := core.DesignTemplate(scene.Material, base, scale)
+					if err != nil {
+						return func() { a.SetHint(T("common.error", "msg", err.Error())) }
+					}
+					newDesign = &designTemplate{scene: scene, source: source, scale: scale, img: img, info: info}
+					if source == "light" {
+						newDesign.light = light
+						newDesign.channel = ch
+					}
+					template = img
+				}
+			}
+			input = core.ApplyWarp(inputBase, &params, 1)
 		}
 		var report *core.AlignReport
 		var truth *core.TruthComparison
@@ -558,7 +633,7 @@ func (p *AlignPanel) requestRun(force bool) {
 		} else if !regenerated {
 			fit = curFit
 		}
-		aligned := alignedFor(curAligned, template, input, fit, params.Occlusions, config.PyramidFactor)
+		aligned := alignedFor(curAligned, reference, input, fit, params.Occlusions, config.PyramidFactor)
 		pix := packAlignView(viewKind, template, input, aligned)
 		elapsed := float64(time.Since(start).Microseconds()) / 1000
 		w, h := template.Width, template.Height
@@ -569,7 +644,16 @@ func (p *AlignPanel) requestRun(force bool) {
 			}
 			p.template = template
 			p.input = input
+			p.reference = reference
 			p.aligned = aligned
+			if newDesign != nil {
+				p.design = newDesign
+			}
+			if tplSource == tplDesign && p.design != nil {
+				p.designInfo = p.design.info
+			} else {
+				p.designInfo = core.DesignInfo{}
+			}
 			// Only a job that saw the latest edits may mark the panel clean: a long run (pyramid 1)
 			// can finish after the user has already changed something.
 			if reflect.DeepEqual(key, p.inputKey()) {
@@ -615,13 +699,14 @@ func (p *AlignPanel) requestView() {
 	viewKind := p.viewKind
 	template := p.template
 	input := p.input
+	reference := p.alignReference()
 	fit, cached := p.alignFit(), p.aligned
 	occs := p.scaledParams().Occlusions
 	pyramid := p.config.PyramidFactor
 	a.Jobs.Run("align-view", func() func() {
 		aligned := cached
 		if isAlignedView(viewKind) {
-			aligned = alignedFor(cached, template, input, fit, occs, pyramid)
+			aligned = alignedFor(cached, reference, input, fit, occs, pyramid)
 		}
 		pix := packAlignView(viewKind, template, input, aligned)
 		w, h := template.Width, template.Height
@@ -659,6 +744,39 @@ func (p *AlignPanel) DrawLeft() {
 			}
 			p.dirty = true
 			changed = true
+		}
+		tsel := 0
+		if p.tplSource == tplImage {
+			tsel = 1
+		}
+		if Combo(T("align.template"), "align-template", &tsel, []string{T("align.template.design"), T("align.template.image")}) {
+			if tsel == 1 {
+				p.tplSource = tplImage
+			} else {
+				p.tplSource = tplDesign
+			}
+			p.dirty = true
+			changed = true
+		}
+		if p.tplSource == tplDesign {
+			Note(T("align.template.designNote"))
+			if p.design != nil && p.template == p.design.img {
+				if p.designInfo.Registered {
+					pose := core.FitPose(p.designInfo.Fit, p.template.Width, p.template.Height)
+					workScale := p.lastScale
+					if workScale == 0 {
+						workScale = p.scale
+					}
+					Note(T("align.template.registered",
+						"dx", F(pose.ShiftX*float64(workScale), 1),
+						"dy", F(pose.ShiftY*float64(workScale), 1),
+						"deg", F(pose.ThetaDeg, 2)))
+				} else {
+					Note(T("align.template.unregistered"))
+				}
+			}
+		} else {
+			Note(T("align.template.imageNote"))
 		}
 		sc := 0
 		switch p.scale {

@@ -56,40 +56,45 @@ func packAlignView(kind string, template, input *core.GrayImage, al *alignedResu
 // found (never the true warp), and how much closer to the template that brought it.
 type alignedResult struct {
 	input         *core.GrayImage // the input image it was made from
+	reference     *core.GrayImage // the picture the grey difference and the check windows were measured against
 	fit           core.Similarity
 	re            *core.Realigned
-	before, after float64 // mean |template - image| over the pixels that have data, before and after aligning
+	before, after float64 // mean |reference - image| over the pixels that have data, before and after aligning
 	used          int     // number of pixels that have data (the occlusions are left out)
 	pyramid       int     // search pyramid factor of the check
 	check         core.ShiftCheck
 }
 
 // makeAligned realigns the input with the fit; the occlusions (working-resolution input
-// coordinates) are left out of the comparison because they hide the image on purpose.
-func makeAligned(template, input *core.GrayImage, fit core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
+// coordinates) are left out of the comparison because they hide the image on purpose. reference
+// is the real un-warped picture the input was warped from (the template itself with the "image"
+// template): the grey difference and the check windows measure against it, never against the
+// shape-only design picture.
+func makeAligned(reference, input *core.GrayImage, fit core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
 	rects := make([]core.Rect, len(occs))
 	for i, o := range occs {
 		rects[i] = o.Rect
 	}
 	re := core.RealignInput(input, fit, rects)
-	before, used := core.MeanAbsDiff(template, input, re.Valid)
-	after, _ := core.MeanAbsDiff(template, re.Image, re.Valid)
+	before, used := core.MeanAbsDiff(reference, input, re.Valid)
+	after, _ := core.MeanAbsDiff(reference, re.Image, re.Valid)
 	return &alignedResult{
-		input: input, fit: fit, re: re, before: before, after: after, used: used,
-		pyramid: pyramid, check: core.CheckRealigned(template, re, pyramid),
+		input: input, reference: reference, fit: fit, re: re, before: before, after: after, used: used,
+		pyramid: pyramid, check: core.CheckRealigned(reference, re, pyramid),
 	}
 }
 
 // alignedFor returns the realigned image for input and fit, reusing cached when it was made from
-// the same input and fit; nil when there is no fit.
-func alignedFor(cached *alignedResult, template, input *core.GrayImage, fit *core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
+// the same input and fit; nil when there is no fit. reference is the real un-warped picture the
+// input was warped from (the template itself with the "image" template).
+func alignedFor(cached *alignedResult, reference, input *core.GrayImage, fit *core.Similarity, occs []core.Occlusion, pyramid int) *alignedResult {
 	if fit == nil {
 		return nil
 	}
-	if cached != nil && cached.input == input && cached.fit == *fit && cached.pyramid == pyramid {
+	if cached != nil && cached.input == input && cached.reference == reference && cached.fit == *fit && cached.pyramid == pyramid {
 		return cached
 	}
-	return makeAligned(template, input, *fit, occs, pyramid)
+	return makeAligned(reference, input, *fit, occs, pyramid)
 }
 
 // alignFit is the transform the last run found for the image that is shown now; nil when there is
@@ -102,10 +107,20 @@ func (p *AlignPanel) alignFit() *core.Similarity {
 	return &f
 }
 
+// alignReference is the real un-warped picture the whole-picture checks measure against: the
+// reference when there is one, else the template (the "image" template is its own reference).
+func (p *AlignPanel) alignReference() *core.GrayImage {
+	if p.reference != nil {
+		return p.reference
+	}
+	return p.template
+}
+
 // alignedNow is the realigned image that belongs to the image and the fit shown now, or nil.
 func (p *AlignPanel) alignedNow() *alignedResult {
 	fit := p.alignFit()
-	if fit == nil || p.aligned == nil || p.aligned.input != p.input || p.aligned.fit != *fit {
+	if fit == nil || p.aligned == nil || p.aligned.input != p.input || p.aligned.fit != *fit ||
+		p.aligned.reference != p.alignReference() {
 		return nil
 	}
 	return p.aligned
@@ -862,9 +877,9 @@ func init() {
 		"align.check.label":         "对齐后局部残余位移 最大 / 均方根",
 		"align.check.worst":         "最大残余 {px} px",
 		"align.view.gotoWorst":      "放大到最大残余处",
-		"align.check.note":          "把模板切成 {total} 个窗口，在对齐后的图里重新找一遍（{n} 个找到），量出每个窗口还差多少。颜色按 OK/NG 阈值（OK ≤ {ok} px）。ROI 残差只看 ROI 处，这一项看整幅图。",
+		"align.check.note":          "把未扭曲的原图（不是假想图）切成 {total} 个窗口，在对齐后的图里重新找一遍（{n} 个找到），量出每个窗口还差多少。颜色按 OK/NG 阈值（OK ≤ {ok} px）。ROI 残差只看 ROI 处，这一项看整幅图。",
 		"align.check.none":          "对齐后的图里没有可用于复核的窗口（图太小、没有数据或纹理不足）。",
-		"align.gain.note":           "平均 |模板 − 图像| 灰度差，只计有数据的像素，遮挡区不计；越小越好。噪声、光照和翘起等相似变换描述不了的部分会让它降不到 0。",
+		"align.gain.note":           "平均 |原图 − 图像| 灰度差（原图 = 扭曲前的真实图；用图像模板时就是模板），只计有数据的像素，遮挡区不计；越小越好。噪声、光照和翘起等相似变换描述不了的部分会让它降不到 0。",
 	}, map[string]string{
 		"align.view.aligned":        "Aligned (algorithm result)",
 		"align.view.alignedOverlay": "Aligned overlay (template red / aligned cyan)",
@@ -878,9 +893,9 @@ func init() {
 		"align.check.label":         "Remaining local shift after aligning, max / rms",
 		"align.check.worst":         "Largest remaining shift {px} px",
 		"align.view.gotoWorst":      "Zoom to the largest remaining shift",
-		"align.check.note":          "The template is cut into {total} windows and each is searched again in the aligned image ({n} found); this is how far each one is still off. Colour by the OK/NG thresholds (OK ≤ {ok} px). The ROI residual only looks at the ROIs, this looks at the whole picture.",
+		"align.check.note":          "The un-warped source picture (not the design picture) is cut into {total} windows and each is searched again in the aligned image ({n} found); this is how far each one is still off. Colour by the OK/NG thresholds (OK ≤ {ok} px). The ROI residual only looks at the ROIs, this looks at the whole picture.",
 		"align.check.none":          "The aligned image has no window to check with (too small, no data or too little texture).",
-		"align.gain.note":           "Mean |template − image| grey difference over the pixels that have data, occlusions left out; smaller is better. Noise, lighting and lift that a similarity cannot describe keep it above 0.",
+		"align.gain.note":           "Mean |source − image| grey difference (source = the un-warped real picture, the template itself with the image template) over the pixels that have data, occlusions left out; smaller is better. Noise, lighting and lift that a similarity cannot describe keep it above 0.",
 	}, map[string]string{
 		"align.view.aligned":        "정렬 후 (알고리즘 결과)",
 		"align.view.alignedOverlay": "정렬 후 오버레이 (템플릿 빨강 / 정렬 후 청록)",
@@ -894,8 +909,8 @@ func init() {
 		"align.check.label":         "정렬 후 국소 잔여 이동량 최대 / RMS",
 		"align.check.worst":         "가장 큰 잔여 이동량 {px} px",
 		"align.view.gotoWorst":      "가장 큰 잔여 위치로 확대",
-		"align.check.note":          "템플릿을 {total}개 창으로 나눠 정렬된 이미지에서 다시 찾고({n}개 찾음) 각 창이 아직 얼마나 벗어났는지 측정합니다. 색은 OK/NG 임계값 기준(OK ≤ {ok} px). ROI 잔차는 ROI 위치만 보지만 이 값은 이미지 전체를 봅니다.",
+		"align.check.note":          "왜곡되지 않은 원본 이미지(가상 이미지가 아님)를 {total}개 창으로 나눠 정렬된 이미지에서 다시 찾고({n}개 찾음) 각 창이 아직 얼마나 벗어났는지 측정합니다. 색은 OK/NG 임계값 기준(OK ≤ {ok} px). ROI 잔차는 ROI 위치만 보지만 이 값은 이미지 전체를 봅니다.",
 		"align.check.none":          "정렬된 이미지에 확인할 수 있는 창이 없습니다(이미지가 작거나 데이터·질감이 부족).",
-		"align.gain.note":           "데이터가 있는 픽셀에 대한 평균 |템플릿 − 이미지| 밝기 차이이며 가림 영역은 제외합니다. 작을수록 좋고, 노이즈·조명·유사 변환으로 표현할 수 없는 들뜸 때문에 0까지 내려가지는 않습니다.",
+		"align.gain.note":           "데이터가 있는 픽셀에 대한 평균 |원본 − 이미지| 밝기 차이(원본 = 왜곡 전 실제 이미지, 이미지 템플릿이면 템플릿 자체)이며 가림 영역은 제외합니다. 작을수록 좋고, 노이즈·조명·유사 변환으로 표현할 수 없는 들뜸 때문에 0까지 내려가지는 않습니다.",
 	})
 }

@@ -23,6 +23,10 @@ func alignPanelOf(t *testing.T) (*App, *AlignPanel) {
 		t.Fatal("no align panel")
 	}
 	ap.ModelLoaded()
+	// These tests exercise the diagnostics and staleness logic on the 96x64 synthetic model with the
+	// same-picture template, where every ROI trivially matches; the design-picture tests live in
+	// align_design_test.go.
+	ap.tplSource = tplImage
 	ap.scale = 1
 	ap.rois = []core.AlignRoi{
 		{Name: "A", Rect: core.Rect{X: 2, Y: 2, W: 30, H: 30}},

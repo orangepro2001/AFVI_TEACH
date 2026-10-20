@@ -205,6 +205,15 @@ func NewSelftest(a *App, out string) *Selftest {
 			ap.requestRun(true)
 			return map[string]any{"newRoi": fmt.Sprintf("%.0f,%.0f %.0f×%.0f", last.X, last.Y, last.W, last.H)}, nil
 		}},
+		// The pixel-exact pipeline checks below compare template and input of the same picture, so
+		// they need the "image" template (the old behaviour); the design-picture steps come after
+		// align-reset.
+		{name: "align-template-image", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.tplSource = tplImage
+			ap.dirty = true
+			ap.requestRun(true)
+		}},
 		{name: "align-overlay", enter: func(a *App) {
 			tab("align")(a)
 			ap := s.panel("align").(*AlignPanel)
@@ -464,6 +473,164 @@ func NewSelftest(a *App, out string) *Selftest {
 		// Leave the tab as it was found for the screenshots that follow.
 		{name: "align-reset", enter: func(a *App) {
 			ap := s.panel("align").(*AlignPanel)
+			ap.params = defaultWarpParams()
+			ap.dirty = true
+			ap.requestRun(true)
+		}},
+		// The imagined design picture: shape only, no real texture. On the machine ROIs it is still
+		// found (they sit on real features) but never as perfectly as the old same-picture template.
+		{name: "align-design", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.tplSource = tplDesign
+			ap.params = defaultWarpParams()
+			// A slight shift, so the whole-picture checks have something to gain (an unwarped input
+			// is already the reference and its grey difference starts at 0).
+			setWarpGeometry(&ap.params, warpPresetByID("slight"))
+			ap.occs = nil
+			ap.rois = cloneRois(a.Scene.MachineRois)
+			ap.dirty = true
+			ap.requestRun(true)
+		}, shot: "native-align-design.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil || ap.truth == nil {
+				return nil, fmt.Errorf("align-design: no report or truth comparison")
+			}
+			if ap.reportStale() {
+				return nil, fmt.Errorf("align-design: the fresh report is shown as stale")
+			}
+			if ap.design == nil || ap.template != ap.design.img {
+				return nil, fmt.Errorf("align-design: the template is not the cached design picture")
+			}
+			down, err := core.DownsampleArea(s.a.Scene.Median, ap.scale)
+			if err != nil {
+				return nil, fmt.Errorf("align-design: downsample the median: %v", err)
+			}
+			if len(down.Data) != len(ap.template.Data) {
+				return nil, fmt.Errorf("align-design: design template %d px, median at scale %d %d px", len(ap.template.Data), ap.scale, len(down.Data))
+			}
+			differing := 0
+			for i := range ap.template.Data {
+				if ap.template.Data[i] != down.Data[i] {
+					differing++
+				}
+			}
+			if differing*100 <= len(ap.template.Data) {
+				return nil, fmt.Errorf("align-design: only %d of %d template pixels differ from the median, the design picture still carries its texture", differing, len(ap.template.Data))
+			}
+			if ap.designInfo.Tried <= 0 {
+				return nil, fmt.Errorf("align-design: registration tried %d windows, want more than 0", ap.designInfo.Tried)
+			}
+			if !ap.designInfo.Registered {
+				return nil, fmt.Errorf("align-design: the design picture was not registered (%d of %d windows located, %d inliers)", ap.designInfo.Windows, ap.designInfo.Tried, ap.designInfo.Inliers)
+			}
+			located := 0
+			for _, m := range ap.report.Matches {
+				if m.Located {
+					located++
+					if m.Ncc >= 0.95 {
+						return nil, fmt.Errorf("align-design: ROI %s matched the design picture with NCC %.3f, want below 0.95", m.Name, m.Ncc)
+					}
+				}
+			}
+			if located < 4 {
+				return nil, fmt.Errorf("align-design: only %d machine ROIs located on the design picture, want at least 4", located)
+			}
+			if ap.report.Level == core.VerdictNG {
+				return nil, fmt.Errorf("align-design: verdict %s on the machine ROIs, want not NG", ap.report.Level)
+			}
+			// The whole-picture checks measure against the real un-warped picture, not the design
+			// template, so they must still show a clear gain and a small leftover.
+			al := ap.alignedNow()
+			if al == nil {
+				return nil, fmt.Errorf("align-design: no aligned image after a finished run")
+			}
+			if !(al.after < al.before/3) {
+				return nil, fmt.Errorf("align-design: mean grey difference %.2f -> %.2f, want at least a three-fold drop", al.before, al.after)
+			}
+			c := al.check
+			if c.Windows < 8 {
+				return nil, fmt.Errorf("align-design: only %d of %d check windows found again", c.Windows, c.Total)
+			}
+			// Shape-only matching is coarser than matching the picture against itself (1.4 px), but it
+			// must stay far from the tens of pixels a template without texture used to report.
+			if c.MaxPx > 3*ap.reportConfig.OkResidualPx {
+				return nil, fmt.Errorf("align-design: %.2f px still left over (max), more than three times the OK threshold %.2f", c.MaxPx, ap.reportConfig.OkResidualPx)
+			}
+			return map[string]any{
+				"verdict": string(ap.report.Level), "meanNcc": ap.report.MeanNcc,
+				"registered": ap.designInfo.Registered, "inliers": ap.designInfo.Inliers,
+				"truthMaxPx":     ap.truth.MaxErrorPx,
+				"greyDiffBefore": al.before, "greyDiffAfter": al.after,
+				"leftoverMaxWorkingPx": c.MaxPx,
+			}, nil
+		}},
+		// The user's complaint: ROIs placed at random featureless spots are no longer found by the
+		// design template (there is no imagined shape there to match).
+		{name: "align-casual", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			fx := float64(a.Scene.W) / 5860
+			fy := float64(a.Scene.H) / 4020
+			ap.rois = []core.AlignRoi{
+				{Name: "R1", Rect: core.Rect{X: 4613 * fx, Y: 1363 * fy, W: 346 * fx, H: 479 * fy}},
+				{Name: "R2", Rect: core.Rect{X: 4775 * fx, Y: 3257 * fy, W: 265 * fx, H: 258 * fy}},
+				{Name: "R3", Rect: core.Rect{X: 600 * fx, Y: 600 * fy, W: 300 * fx, H: 300 * fy}},
+				{Name: "R4", Rect: core.Rect{X: 2000 * fx, Y: 1500 * fy, W: 300 * fx, H: 300 * fy}},
+			}
+			ap.selected = -1
+			ap.dirty = true
+			ap.requestRun(true)
+		}, shot: "native-align-casual.png", check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil {
+				return nil, fmt.Errorf("align-casual: no report")
+			}
+			if ap.reportStale() {
+				return nil, fmt.Errorf("align-casual: the fresh report is shown as stale")
+			}
+			located := 0
+			for _, m := range ap.report.Matches {
+				if m.Located {
+					located++
+				}
+			}
+			if ap.report.Level == core.VerdictOK && located >= 4 {
+				return nil, fmt.Errorf("align-casual: the design template passed %d casual ROIs with verdict %s", located, ap.report.Level)
+			}
+			if ap.report.MeanNcc >= 0.9 {
+				return nil, fmt.Errorf("align-casual: mean NCC %.3f on the design template, want below 0.9", ap.report.MeanNcc)
+			}
+			return map[string]any{"verdict": string(ap.report.Level), "located": located, "meanNcc": ap.report.MeanNcc}, nil
+		}},
+		// The same random ROIs with the old same-picture template: on one and the same image every
+		// window trivially matches, so they all pass, which is exactly the flaw being fixed.
+		{name: "align-casual-image", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.tplSource = tplImage
+			ap.dirty = true
+			ap.requestRun(true)
+		}, check: func(s *Selftest) (map[string]any, error) {
+			ap := s.panel("align").(*AlignPanel)
+			if ap.report == nil {
+				return nil, fmt.Errorf("align-casual-image: no report")
+			}
+			located := 0
+			for _, m := range ap.report.Matches {
+				if m.Located {
+					located++
+				}
+			}
+			if ap.report.Level != core.VerdictOK || located < 4 || ap.report.MeanNcc <= 0.95 {
+				return nil, fmt.Errorf("align-casual-image: verdict %s, %d located, mean NCC %.3f, want all 4 located and above 0.95",
+					ap.report.Level, located, ap.report.MeanNcc)
+			}
+			return map[string]any{"verdict": string(ap.report.Level), "meanNcc": ap.report.MeanNcc}, nil
+		}},
+		// Restore the design template and the machine ROIs for the screenshots that follow.
+		{name: "align-design-reset", enter: func(a *App) {
+			ap := s.panel("align").(*AlignPanel)
+			ap.tplSource = tplDesign
+			ap.rois = cloneRois(a.Scene.MachineRois)
+			ap.selected = -1
 			ap.params = defaultWarpParams()
 			ap.dirty = true
 			ap.requestRun(true)
@@ -2341,6 +2508,11 @@ var teachOnlySteps = map[string]bool{
 	"align-offset":          true,
 	"align-lift":            true,
 	"align-reset":           true,
+	"align-template-image":  true,
+	"align-design":          true,
+	"align-casual":          true,
+	"align-casual-image":    true,
+	"align-design-reset":    true,
 	"interact-defect-probe": true,
 	"align-light-ko":        true,
 	"defect-params-dialog":  true,
