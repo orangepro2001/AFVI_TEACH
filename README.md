@@ -53,6 +53,7 @@ x86_64-w64-mingw32-gcc --version
 ./scripts/build-wsl.sh                         # 一键构建已包含安装包：dist/AFVI-Teach-Setup-<版本>.exe（约 14 MB）
 ./scripts/build-wsl.sh --reference reference   # 连同机台数据一起打包（默认不含）
 ./scripts/package-wsl.sh --no-build            # 只重新打包 bin/ 里现有的程序
+./scripts/build-wsl.sh --commit "说明" --desktop   # 检查通过后提交，并把安装包放到 Windows 桌面（--push --fetch 则改为推送后下载服务器构建，见 docs/BUILD.md）
 ```
 
 一个自解压安装程序（纯 Go，不需要 NSIS / Inno Setup），把教学程序、相机工作室、`camera.exe`、文档与机台配置示例装到 `%LOCALAPPDATA%\Programs\AFVI Teach`（每用户安装，不需要管理员权限），并创建开始菜单 / 桌面快捷方式、命令行入口（可选加入 PATH）和“应用和功能”里的卸载项。图形向导或 `-silent` 静默安装，`uninstall.exe` 卸载并默认保留 `afvi.toml` 与 `captures`。Windows 原生用 `scripts\package.ps1`。参数与细节见 [docs/BUILD.md](docs/BUILD.md)。
@@ -139,10 +140,11 @@ AFVI_TEACH/
 ├── scripts/build.ps1         # Windows 一键构建（同上，最后调用 package.ps1）
 ├── scripts/package-wsl.sh    # 只生成安装包（WSL2；一键构建的最后一步）
 ├── scripts/package.ps1       # 只生成安装包（Windows；一键构建的最后一步）
+├── scripts/ship-wsl.sh       # 交付：提交 / 推送 / 安装包放到桌面 / 下载服务器构建（Windows 为 ship.ps1；build 脚本的 --commit --push --desktop --fetch）
 ├── docs/BUILD.md             # 完整构建指南
 ├── docs/USAGE.md             # 使用说明
 ├── docs/ROLES.md             # 角色、页面、强制对位流程与相机默认错位
-├── docs/GOLDEN.md            # 金板：检查区域遮罩、Padding 留边、SR 自动内缩
+├── docs/GOLDEN.md            # 金板：检查区域遮罩、Padding 留边、SR 自动内缩、UserMask 不检查区域
 ├── docs/LINK.md              # 实时联机协议与保存格式
 ├── docs/REFERENCE_SETUP.md   # reference 目录设置说明
 ├── reference/                # 机台测试数据（需单独配置）
@@ -165,6 +167,8 @@ AFVI_TEACH/
   - **应用图标**：两个 GUI 都有 Win32 经典风格的图标，由 `internal/appicon` 渲染、`go run ./cmd/mkicon` 生成（详见 [docs/ICON.md](docs/ICON.md)）
   - **对位页面**：先在产品的设计假想图上确认 ROI 框（强制对位），检测前每张抓拍都先对齐；管理员另有原来的对位试验台（合成错位实验）
   - **缺陷检出页面**：相机通道、相机抓拍来源、F1 检出参数、学习区间、结果与探查；无绘制工具，也不显示模拟笔画轮廓
+  - **金板页读法**：默认只画最终检查区域（品红 = 已减去 Padding 的金属检查区、绿色 = SR），「显示留边」（Padding 去掉的一圈，蓝色）默认关闭；Padding 较大时细走线会变细甚至消失，这是效果不是 bug（详见 [docs/GOLDEN.md](docs/GOLDEN.md)）
+  - **UserMask（不检查区域）**：管理员在缺陷检出页画 Metal / SR 两类排除区域，每类只从对应的检查区扣除，随金板保存到 golden.json 的 `userMask`；操作员不能编辑，检测结果里不会出现这些区域
 - **相机合成工作室（camera-gui.exe）**
   - **光照与 GV 页面**：亮度调节、GV 测量
   - **缺陷合成页面**：缺陷标注（点/线/块/异物/污染）、虚拟良品、笔刷与画框工具、颜色、随机不良、传感器噪声、测试图/标准图/差异图、选择面板与浮动编辑器、可见的笔画轮廓
@@ -241,6 +245,7 @@ AFVI_TEACH/
 
 **缺陷检出页（teach-imgui.exe）**：
 - 相机通道、相机抓拍来源（载入或 Snap 抓拍）、F1 检出参数、学习区间、结果与探查
+- UserMask：左栏先选 Metal 或 SR，再选矩形 / 椭圆 / 多边形，在图上拖框（多边形右键闭合）；每个区域只从自己那一类检查区域扣除，可逐个删除、按类别或全部清空（最多 256 个），保存金板时写入 golden.json 的 `userMask`（见 [docs/GOLDEN.md](docs/GOLDEN.md)）
 - 没有绘制工具，也从不画出模拟笔画轮廓（那是答案）
 - 测试图默认来自实时联机：工作室在运行时自动跟随它的场景（「实时联机」分组，复选框"跟随相机工作室"），显示来源与连接状态；型号不同时给出"切换到该型号"按钮；也可用「相机抓拍」载入或 Snap；既没有工作室也没有抓拍时使用内置默认场景（虚拟良品 + 约 10 个很小的不良）
 - 「相机抓拍」分组的路径框默认是 `captures\<型号 id>`（与工作室输出栏相同）：「载入」读入并恢复该文件夹里的 `inspect.json`，「保存」写入 `snap.json`、三个通道的测试图与良品图和 `inspect.json`；F1 窗口里还有「保存检出参数 / 载入检出参数」

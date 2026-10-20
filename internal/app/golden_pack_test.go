@@ -35,14 +35,17 @@ func goldenPixel(buf []byte, w, x, y int) [3]uint8 {
 
 func TestDefaultGoldenView(t *testing.T) {
 	v := defaultGoldenView()
-	if v.Color != [3]uint8{255, 0, 0} {
-		t.Fatalf("color = %v, want red", v.Color)
+	if v.Color != [3]uint8{255, 0, 255} {
+		t.Fatalf("color = %v, want magenta", v.Color)
 	}
 	if v.Opacity != 50 {
 		t.Fatalf("opacity = %d, want 50", v.Opacity)
 	}
-	if !v.ShowMask || !v.ShowSR || !v.ShowBand {
-		t.Fatalf("default shows = %+v, want all true", v)
+	if !v.ShowMask || !v.ShowSR {
+		t.Fatalf("default shows = %+v, want mask and SR on", v)
+	}
+	if v.ShowBand {
+		t.Fatalf("default shows band, want it off")
 	}
 }
 
@@ -59,8 +62,8 @@ func TestPackGoldenOpacity(t *testing.T) {
 	view := defaultGoldenView()
 	buf := PackGolden(src, metal, metal, nil, view)
 	PutRGBA(buf)
-	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 50} {
-		t.Fatalf("metal pixel = %v, want (178,50,50)", got)
+	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 178} {
+		t.Fatalf("metal pixel = %v, want (178,50,178)", got)
 	}
 	if got := goldenPixel(buf, w, 0, 0); got != [3]uint8{100, 100, 100} {
 		t.Fatalf("plain pixel = %v, want grey 100", got)
@@ -75,8 +78,8 @@ func TestPackGoldenOpacity(t *testing.T) {
 
 	view.Opacity = 100
 	buf = PackGolden(src, metal, metal, nil, view)
-	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{255, 0, 0} {
-		t.Fatalf("opacity 100 pixel = %v, want pure red", got)
+	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{255, 0, 255} {
+		t.Fatalf("opacity 100 pixel = %v, want pure magenta", got)
 	}
 	PutRGBA(buf)
 
@@ -113,15 +116,28 @@ func TestPackGoldenSRAndBand(t *testing.T) {
 	inspect := goldenTestMask(w, h, [2]int{1, 1})
 	sr := goldenTestMask(w, h, [2]int{3, 2})
 	view := defaultGoldenView()
+
+	// Band off by default: the band pixel stays the plain grey picture.
 	buf := PackGolden(src, metal, inspect, sr, view)
-	if got := goldenPixel(buf, w, 2, 1); got != [3]uint8{178, 130, 50} {
-		t.Fatalf("band pixel = %v, want (178,130,50)", got)
+	if got := goldenPixel(buf, w, 2, 1); got != [3]uint8{100, 100, 100} {
+		t.Fatalf("band pixel (band off) = %v, want grey 100", got)
 	}
 	if got := goldenPixel(buf, w, 3, 2); got != [3]uint8{50, 150, 50} {
 		t.Fatalf("sr pixel = %v, want (50,150,50)", got)
 	}
-	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 50} {
-		t.Fatalf("inspect pixel = %v, want (178,50,50)", got)
+	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 178} {
+		t.Fatalf("inspect pixel = %v, want (178,50,178)", got)
+	}
+	PutRGBA(buf)
+
+	// Band on: azure {70,140,255} at 50% over grey 100 -> (85,120,178).
+	view.ShowBand = true
+	buf = PackGolden(src, metal, inspect, sr, view)
+	if want := goldenBlend([3]uint8{100, 100, 100}, goldenBandColor, 50); want != ([3]uint8{85, 120, 178}) {
+		t.Fatalf("blend formula = %v, want (85,120,178)", want)
+	}
+	if got := goldenPixel(buf, w, 2, 1); got != [3]uint8{85, 120, 178} {
+		t.Fatalf("band pixel (band on) = %v, want (85,120,178)", got)
 	}
 	PutRGBA(buf)
 }
@@ -133,9 +149,9 @@ func TestPackGoldenOrder(t *testing.T) {
 	sr := goldenTestMask(w, h, [2]int{2, 2})
 	view := defaultGoldenView()
 	buf := PackGolden(src, metal, metal, sr, view)
-	// Red at 50% over grey 100 is (178,50,50); green at 50% over that is (89,125,25).
-	if got := goldenPixel(buf, w, 2, 2); got != [3]uint8{89, 125, 25} {
-		t.Fatalf("overlapping pixel = %v, want SR painted last (89,125,25)", got)
+	// Magenta at 50% over grey 100 is (178,50,178); green at 50% over that is (89,125,89).
+	if got := goldenPixel(buf, w, 2, 2); got != [3]uint8{89, 125, 89} {
+		t.Fatalf("overlapping pixel = %v, want SR painted last (89,125,89)", got)
 	}
 	PutRGBA(buf)
 }
@@ -146,8 +162,8 @@ func TestPackGoldenNoInspectFallsBackToMetal(t *testing.T) {
 	metal := goldenTestMask(w, h, [2]int{1, 1})
 	view := defaultGoldenView()
 	buf := PackGolden(src, metal, nil, nil, view)
-	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 50} {
-		t.Fatalf("metal pixel without inspect = %v, want (178,50,50)", got)
+	if got := goldenPixel(buf, w, 1, 1); got != [3]uint8{178, 50, 178} {
+		t.Fatalf("metal pixel without inspect = %v, want (178,50,178)", got)
 	}
 	PutRGBA(buf)
 }

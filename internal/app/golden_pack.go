@@ -12,18 +12,19 @@ type goldenView struct {
 	Opacity  int      // 0..100
 	ShowMask bool     // paint the Metal mask (the inspected part, i.e. after the padding)
 	ShowSR   bool     // paint the automatic SR mask in green
-	ShowBand bool     // paint the padding band (drawn Metal minus inspected Metal) in orange
+	ShowBand bool     // paint the padding band (drawn Metal minus inspected Metal) in azure
 }
 
-// defaultGoldenView returns the initial view: red, half opacity, every layer on.
+// defaultGoldenView returns the initial view: magenta (the final inspection area),
+// half opacity, SR on, padding band off.
 func defaultGoldenView() goldenView {
-	return goldenView{Color: [3]uint8{255, 0, 0}, Opacity: 50, ShowMask: true, ShowSR: true, ShowBand: true}
+	return goldenView{Color: [3]uint8{255, 0, 255}, Opacity: 50, ShowMask: true, ShowSR: true, ShowBand: false}
 }
 
 // goldenSRColor and goldenBandColor are the fixed colours of the SR shade and of
 // the padding band.
 var goldenSRColor = [3]uint8{0, 200, 0}
-var goldenBandColor = [3]uint8{255, 160, 0}
+var goldenBandColor = [3]uint8{70, 140, 255}
 
 // PackGolden returns an opaque RGBA picture (GetRGBA buffer, the caller
 // PutRGBA's it) of src painted with the masks.

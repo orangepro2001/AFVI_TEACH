@@ -93,5 +93,7 @@ fi
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/mkinstaller "${args[@]}"
 rm -f dist/setup-stub.exe
 chmod +x "$OUT"
+# ship-wsl.sh desktop picks the installer up from here.
+printf '%s\n' "$OUT" > dist/.last-installer
 
 echo "OK: $OUT"

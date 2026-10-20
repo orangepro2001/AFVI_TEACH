@@ -75,31 +75,46 @@ func TestAlignTemplateGoldenFollowsBoard(t *testing.T) {
 	if out == nil {
 		t.Fatal("AlignOutcome() is nil")
 	}
-	if out.GoldenRev != g.Rev() {
-		t.Fatalf("out.GoldenRev = %d, want %d", out.GoldenRev, g.Rev())
+	if out.GoldenRev != g.AlignRev() {
+		t.Fatalf("out.GoldenRev = %d, want %d", out.GoldenRev, g.AlignRev())
 	}
-	if dp.tpl == nil || dp.tpl.goldenRev != g.Rev() {
-		t.Fatalf("cached template does not follow the board: tpl %+v, board rev %d", dp.tpl, g.Rev())
+	if dp.tpl == nil || dp.tpl.goldenRev != g.AlignRev() {
+		t.Fatalf("cached template does not follow the board: tpl %+v, board align rev %d", dp.tpl, g.AlignRev())
 	}
 
-	rev1 := g.Rev()
+	// Padding does not change the drawn Metal mask: no new alignment.
+	revPad := g.Rev()
+	alignRev1 := g.AlignRev()
 	g.SetPadding(g.Padding() + 1)
 	pollJobs(t, a)
-	if g.Rev() == rev1 {
+	if g.Rev() == revPad {
 		t.Fatalf("board revision did not change after SetPadding (%d)", g.Rev())
 	}
+	if g.AlignRev() != alignRev1 {
+		t.Fatalf("align revision %d -> %d after SetPadding, want unchanged", alignRev1, g.AlignRev())
+	}
 	if got := dp.AlignState(); got != alignDone {
-		t.Fatalf("AlignState() = %v after the board change, want alignDone\n%s", got, explainAlign(dp.AlignOutcome(), len(rois)))
+		t.Fatalf("AlignState() = %v after SetPadding, want alignDone\n%s", got, explainAlign(dp.AlignOutcome(), len(rois)))
+	}
+
+	// A change of the drawn Metal mask is aligned to again.
+	g.Morph(morphDilate, 1)
+	pollJobs(t, a)
+	if g.AlignRev() == alignRev1 {
+		t.Fatalf("align revision did not change after a mask edit (%d)", g.AlignRev())
+	}
+	if got := dp.AlignState(); got != alignDone {
+		t.Fatalf("AlignState() = %v after the mask change, want alignDone\n%s", got, explainAlign(dp.AlignOutcome(), len(rois)))
 	}
 	out2 := dp.AlignOutcome()
 	if out2 == nil {
 		t.Fatal("AlignOutcome() is nil after the board change")
 	}
-	if out2.GoldenRev != g.Rev() {
-		t.Fatalf("out.GoldenRev = %d, want %d", out2.GoldenRev, g.Rev())
+	if out2.GoldenRev != g.AlignRev() {
+		t.Fatalf("out.GoldenRev = %d, want %d", out2.GoldenRev, g.AlignRev())
 	}
-	if dp.tpl == nil || dp.tpl.goldenRev != g.Rev() {
-		t.Fatalf("cached template does not follow the board: tpl %+v, board rev %d", dp.tpl, g.Rev())
+	if dp.tpl == nil || dp.tpl.goldenRev != g.AlignRev() {
+		t.Fatalf("cached template does not follow the board: tpl %+v, board align rev %d", dp.tpl, g.AlignRev())
 	}
 }
 
@@ -132,7 +147,7 @@ func TestAlignTemplateGoldenStaleWhileBoardChanges(t *testing.T) {
 
 	// Simulate an outcome made for an older board.
 	saved := dp.alignOut.GoldenRev
-	dp.alignOut.GoldenRev = g.Rev() - 1
+	dp.alignOut.GoldenRev = g.AlignRev() - 1
 	if got := dp.AlignState(); got != alignWorking {
 		t.Fatalf("AlignState() = %v with a stale outcome, want alignWorking", got)
 	}

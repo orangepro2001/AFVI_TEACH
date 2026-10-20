@@ -2,6 +2,7 @@
 # build-wsl.sh - One-click build from WSL2: checks, the three programs, and the installer.
 #
 #   ./scripts/build-wsl.sh [--offline] [--no-installer] [--version V] [--reference DIR] [--selftest] [--out DIR]
+#                          [--commit MESSAGE] [--push] [--desktop] [--desktop-dir DIR] [--fetch]
 #
 # gofmt, go vet and the pure-Go tests, then bin/teach-imgui.exe, bin/camera-gui.exe and
 # bin/camera.exe, then the installer dist/AFVI-Teach-Setup-<version>.exe (scripts/package-wsl.sh
@@ -11,6 +12,15 @@
 #   --no-installer   stop after the three programs (scripts/package-wsl.sh calls this way)
 #   --version V      version shown by the installer (default: git describe, else "dev")
 #   --reference DIR  also ship this reference data tree in the installer (never included otherwise)
+#
+# Hand-over steps, all off by default (scripts/ship-wsl.sh does the work; run it alone for details):
+#   --commit MESSAGE   once the checks passed and the programs are built, commit the working tree
+#                      (ONE commit; nothing is committed when a check fails; an already staged index is refused)
+#   --push             then push the branch to origin (never implied by --commit)
+#   --desktop          copy the installer to the Windows desktop (sha256 checked)
+#   --desktop-dir DIR  copy it to DIR instead (implies --desktop)
+#   --fetch            wait for the build server's installer of the pushed commit (GitHub Release nightly,
+#                      up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 #
 # Requires: mingw-w64 (sudo apt-get install mingw-w64)
 
@@ -25,6 +35,11 @@ OFFLINE=false
 INSTALLER=true
 VERSION=""
 REFERENCE=""
+COMMIT_MSG=""
+PUSH=false
+DESKTOP=false
+DESKTOP_DIR=""
+FETCH=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -51,6 +66,27 @@ while [[ $# -gt 0 ]]; do
         --reference)
             REFERENCE="$2"
             shift 2
+            ;;
+        --commit)
+            COMMIT_MSG="${2:?--commit needs a message}"
+            shift 2
+            ;;
+        --push)
+            PUSH=true
+            shift
+            ;;
+        --desktop)
+            DESKTOP=true
+            shift
+            ;;
+        --desktop-dir)
+            DESKTOP=true
+            DESKTOP_DIR="${2:?--desktop-dir needs a folder}"
+            shift 2
+            ;;
+        --fetch)
+            FETCH=true
+            shift
             ;;
         *)
             echo "Unknown option: $1"
@@ -156,6 +192,18 @@ if [ "$SELFTEST" = true ]; then
     echo "  .\\bin\\camera-gui.exe -selftest -out $OUT"
 fi
 
+# --- 5b. hand-over: commit and push -------------------------------------------
+# Only after gofmt, vet, the tests and the builds above passed (set -e stops the script otherwise),
+# and before the installer, so its version names the new commit instead of "-dirty".
+if [ -n "$COMMIT_MSG" ]; then
+    echo "==> commit (scripts/ship-wsl.sh commit)"
+    ./scripts/ship-wsl.sh commit "$COMMIT_MSG"
+fi
+if [ "$PUSH" = true ]; then
+    echo "==> push (scripts/ship-wsl.sh push)"
+    ./scripts/ship-wsl.sh push
+fi
+
 # --- 6. installer -------------------------------------------------------------
 # One self-extracting setup.exe with the three programs, the documents and the example
 # configuration. package-wsl.sh needs the programs built above, so it must not build them again.
@@ -172,6 +220,23 @@ if [ "$INSTALLER" = true ]; then
         pkg_args+=(--reference "$REFERENCE")
     fi
     ./scripts/package-wsl.sh "${pkg_args[@]}"
+fi
+
+# --- 7. hand-over: installer to the desktop -------------------------------------
+ship_args=()
+if [ -n "$DESKTOP_DIR" ]; then
+    ship_args+=(--dir "$DESKTOP_DIR")
+fi
+if [ "$FETCH" = true ]; then
+    echo "==> fetch the server build (scripts/ship-wsl.sh fetch)"
+    ./scripts/ship-wsl.sh fetch --wait 900 "${ship_args[@]}"
+elif [ "$DESKTOP" = true ]; then
+    if [ "$INSTALLER" != true ]; then
+        echo "ERROR: --desktop needs the installer (drop --no-installer) or use --fetch"
+        exit 1
+    fi
+    echo "==> installer to the desktop (scripts/ship-wsl.sh desktop)"
+    ./scripts/ship-wsl.sh desktop "${ship_args[@]}"
 fi
 
 echo "OK"

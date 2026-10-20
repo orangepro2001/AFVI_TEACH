@@ -4,10 +4,20 @@
 # Windows PowerShell 5.1 compatible: no &&, ||, ternary or ?? operators.
 #
 #   .\scripts\build.ps1 [-Selftest] [-Out DIR] [-Offline] [-NoInstaller] [-Version V] [-Reference DIR]
+#                       [-Commit MESSAGE] [-Push] [-Desktop] [-DesktopDir DIR] [-Fetch]
 #
 #   -NoInstaller   stop after the three programs and the optional self-test
 #   -Version V     version shown by the installer (default: git describe, else "dev")
 #   -Reference DIR also ship this reference data tree in the installer (never included otherwise)
+#
+# Hand-over steps, all off by default (scripts\ship.ps1 does the work; read its header for details):
+#   -Commit MESSAGE  once the checks passed and the programs are built, commit the working tree
+#                    (ONE commit; nothing is committed when a check fails; an already staged index is refused)
+#   -Push            then push the branch to origin (never implied by -Commit)
+#   -Desktop         copy the installer to the Windows desktop (sha256 checked)
+#   -DesktopDir DIR  copy it to DIR instead (implies -Desktop)
+#   -Fetch           wait for the build server's installer of the pushed commit (GitHub Release nightly,
+#                    up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 [CmdletBinding()]
 param(
     [switch]$Selftest,
@@ -15,7 +25,12 @@ param(
     [switch]$Offline,
     [switch]$NoInstaller,
     [string]$Version = '',
-    [string]$Reference = ''
+    [string]$Reference = '',
+    [string]$Commit = '',
+    [switch]$Push,
+    [switch]$Desktop,
+    [string]$DesktopDir = '',
+    [switch]$Fetch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -163,6 +178,27 @@ if ($Selftest) {
     }
 }
 
+# --- 5b. hand-over: commit and push -------------------------------------------
+# Only after gofmt, vet, the tests, the builds and the optional self-test above passed ($ErrorActionPreference
+# stops the script otherwise), and before the installer, so its version names the new commit instead of "-dirty".
+$ship = Join-Path $PSScriptRoot 'ship.ps1'
+if ($Commit -ne '') {
+    Write-Host '==> commit (scripts\ship.ps1 commit)'
+    & $ship commit -Message $Commit
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'commit failed.'
+        exit 1
+    }
+}
+if ($Push) {
+    Write-Host '==> push (scripts\ship.ps1 push)'
+    & $ship push
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'push failed.'
+        exit 1
+    }
+}
+
 # --- 6. installer -------------------------------------------------------------
 # package.ps1 builds the programs it ships itself (windowsgui, into dist\bin), so the console
 # builds in bin\ that the self-test needs are left alone. It runs only after the checks above passed.
@@ -175,6 +211,29 @@ if (-not $NoInstaller) {
     & (Join-Path $PSScriptRoot 'package.ps1') @pkg
     if ($LASTEXITCODE -ne 0) {
         Write-Error 'package.ps1 failed.'
+        exit 1
+    }
+}
+
+# --- 7. hand-over: installer to the desktop -------------------------------------
+$shipArgs = @{}
+if ($DesktopDir -ne '') { $shipArgs['Dir'] = $DesktopDir }
+if ($Fetch) {
+    Write-Host '==> fetch the server build (scripts\ship.ps1 fetch)'
+    & $ship fetch -Wait 900 @shipArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'fetch failed.'
+        exit 1
+    }
+} elseif ($Desktop -or $DesktopDir -ne '') {
+    if ($NoInstaller) {
+        Write-Error '-Desktop needs the installer (drop -NoInstaller) or use -Fetch.'
+        exit 1
+    }
+    Write-Host '==> installer to the desktop (scripts\ship.ps1 desktop)'
+    & $ship desktop @shipArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error 'desktop copy failed.'
         exit 1
     }
 }

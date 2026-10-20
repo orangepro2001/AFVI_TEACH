@@ -409,8 +409,8 @@ func (s *Selftest) goldenSteps() []selftestStep {
 				if em := dp.inspectParams[dp.channel].EdgeMargin; em != 0 {
 					return nil, fmt.Errorf("golden-inspect: edge margin %d with a golden board, want 0 (the padding does that job)", em)
 				}
-				if dp.goldenRev != b.Rev() {
-					return nil, fmt.Errorf("golden-inspect: the detection used board revision %d, the board is at %d", dp.goldenRev, b.Rev())
+				if dp.goldenRev != b.LearnRev() {
+					return nil, fmt.Errorf("golden-inspect: the detection used board revision %d, the board is at %d", dp.goldenRev, b.LearnRev())
 				}
 				mat := b.Derived().material
 				reg := s.a.inspectRegionsFor(s.a.Scene)

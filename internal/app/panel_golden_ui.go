@@ -251,6 +251,7 @@ func (p *GoldenPanel) goldenDisplay(b *goldenBoard) {
 	if changed {
 		b.SetView(v)
 	}
+	Note(T("golden.display.note"))
 }
 
 // goldenFileRow draws Undo / Auto / Save / Load.

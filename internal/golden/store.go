@@ -43,25 +43,36 @@ type Board struct {
 	Model    string
 	Settings Settings
 	Metal    *Mask
+	User     UserMask
+}
+
+// userRegionFile is the JSON form of one excluded region.
+type userRegionFile struct {
+	Target string       `json:"target"`
+	Kind   string       `json:"kind"`
+	P0     *[2]float64  `json:"p0,omitempty"`
+	P1     *[2]float64  `json:"p1,omitempty"`
+	Points [][2]float64 `json:"points,omitempty"`
 }
 
 // goldenFile is the JSON document of FileJSON. The field order defines the
 // key order of the written JSON.
 type goldenFile struct {
-	Format   string `json:"format"`
-	Version  int    `json:"version"`
-	Model    string `json:"model"`
-	Width    int    `json:"width"`
-	Height   int    `json:"height"`
-	Channel  int    `json:"channel"`
-	Low      int    `json:"low"`
-	High     int    `json:"high"`
-	OutRange bool   `json:"outRange"`
-	Padding  int    `json:"padding"`
-	SRInset  int    `json:"srInset"`
-	Metal    string `json:"metal"`
-	SHA256   string `json:"sha256"`
-	Created  string `json:"created"`
+	Format   string           `json:"format"`
+	Version  int              `json:"version"`
+	Model    string           `json:"model"`
+	Width    int              `json:"width"`
+	Height   int              `json:"height"`
+	Channel  int              `json:"channel"`
+	Low      int              `json:"low"`
+	High     int              `json:"high"`
+	OutRange bool             `json:"outRange"`
+	Padding  int              `json:"padding"`
+	SRInset  int              `json:"srInset"`
+	Metal    string           `json:"metal"`
+	SHA256   string           `json:"sha256"`
+	Created  string           `json:"created"`
+	UserMask []userRegionFile `json:"userMask,omitempty"`
 }
 
 // Save writes the Metal mask PNG and the JSON sidecar of b into dir, creating
@@ -72,6 +83,9 @@ func Save(dir string, b *Board) error {
 	}
 	if !b.Metal.Valid() {
 		return errors.New("golden: invalid metal mask")
+	}
+	if _, err := encodeUserMask(b.User); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("golden: %w", err)
@@ -91,6 +105,10 @@ func Save(dir string, b *Board) error {
 		return err
 	}
 
+	user, err := encodeUserMask(b.User)
+	if err != nil {
+		return err
+	}
 	doc := goldenFile{
 		Format:   Format,
 		Version:  Version,
@@ -106,6 +124,7 @@ func Save(dir string, b *Board) error {
 		Metal:    FileMask,
 		SHA256:   maskDigest(b.Metal),
 		Created:  time.Now().UTC().Format(time.RFC3339),
+		UserMask: user,
 	}
 	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -185,6 +204,10 @@ func Load(dir string) (*Board, error) {
 	if maskDigest(m) != strings.ToLower(doc.SHA256) {
 		return nil, errors.New("golden: mask sha256 mismatch")
 	}
+	user, err := decodeUserMask(doc.UserMask)
+	if err != nil {
+		return nil, err
+	}
 	return &Board{
 		Model: doc.Model,
 		Settings: Settings{
@@ -196,7 +219,112 @@ func Load(dir string) (*Board, error) {
 			SRInset:  doc.SRInset,
 		},
 		Metal: m,
+		User:  user,
 	}, nil
+}
+
+// kindName returns the JSON name of a shape kind.
+func kindName(k ShapeKind) string {
+	switch k {
+	case ShapeRect:
+		return "rect"
+	case ShapeEllipse:
+		return "ellipse"
+	case ShapePolygon:
+		return "polygon"
+	}
+	return ""
+}
+
+// kindFromName parses a JSON shape kind.
+func kindFromName(s string) (ShapeKind, bool) {
+	switch s {
+	case "rect":
+		return ShapeRect, true
+	case "ellipse":
+		return ShapeEllipse, true
+	case "polygon":
+		return ShapePolygon, true
+	}
+	return 0, false
+}
+
+// encodeUserMask validates u and converts it into its JSON form. An empty list
+// yields nil so the key is omitted.
+func encodeUserMask(u UserMask) ([]userRegionFile, error) {
+	if len(u.Regions) > MaxRegions {
+		return nil, fmt.Errorf("golden: %d user regions, want at most %d", len(u.Regions), MaxRegions)
+	}
+	if len(u.Regions) == 0 {
+		return nil, nil
+	}
+	out := make([]userRegionFile, 0, len(u.Regions))
+	for i, r := range u.Regions {
+		if !r.Valid() {
+			return nil, fmt.Errorf("golden: invalid user region %d", i)
+		}
+		f := userRegionFile{Target: r.Target.String(), Kind: kindName(r.Shape.Kind)}
+		switch r.Shape.Kind {
+		case ShapeRect, ShapeEllipse:
+			p0 := [2]float64{r.Shape.P0.X, r.Shape.P0.Y}
+			p1 := [2]float64{r.Shape.P1.X, r.Shape.P1.Y}
+			f.P0 = &p0
+			f.P1 = &p1
+		case ShapePolygon:
+			pts := make([][2]float64, len(r.Shape.Points))
+			for j, p := range r.Shape.Points {
+				pts[j] = [2]float64{p.X, p.Y}
+			}
+			f.Points = pts
+		}
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+// decodeUserMask validates and converts the JSON form of the excluded regions.
+// A missing key yields the zero UserMask.
+func decodeUserMask(in []userRegionFile) (UserMask, error) {
+	if len(in) == 0 {
+		return UserMask{}, nil
+	}
+	if len(in) > MaxRegions {
+		return UserMask{}, fmt.Errorf("golden: %d user regions, want at most %d", len(in), MaxRegions)
+	}
+	out := UserMask{Regions: make([]Region, 0, len(in))}
+	for i, f := range in {
+		t, ok := ParseTarget(f.Target)
+		if !ok {
+			return UserMask{}, fmt.Errorf("golden: user region %d: unknown target %q", i, f.Target)
+		}
+		kind, ok := kindFromName(f.Kind)
+		if !ok {
+			return UserMask{}, fmt.Errorf("golden: user region %d: unknown kind %q", i, f.Kind)
+		}
+		r := Region{Target: t, Shape: Shape{Kind: kind}}
+		switch kind {
+		case ShapeRect, ShapeEllipse:
+			if f.P0 == nil || f.P1 == nil {
+				return UserMask{}, fmt.Errorf("golden: user region %d: missing corners", i)
+			}
+			r.Shape.P0 = Pt{X: f.P0[0], Y: f.P0[1]}
+			r.Shape.P1 = Pt{X: f.P1[0], Y: f.P1[1]}
+		case ShapePolygon:
+			if len(f.Points) == 0 {
+				return UserMask{}, fmt.Errorf("golden: user region %d: missing points", i)
+			}
+			pts := make([]Pt, len(f.Points))
+			for j, p := range f.Points {
+				pts[j] = Pt{X: p[0], Y: p[1]}
+			}
+			r.Shape.Points = pts
+		}
+		if !r.Valid() {
+			return UserMask{}, fmt.Errorf("golden: invalid user region %d", i)
+		}
+		out.Regions = append(out.Regions, r)
+	}
+	return out, nil
 }
 
 // checkSettings rejects silently invalid numeric settings.

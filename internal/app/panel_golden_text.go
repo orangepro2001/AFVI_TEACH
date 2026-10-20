@@ -4,7 +4,7 @@ func init() {
 	Messages(map[string]string{
 		"tab.golden":   "金板",
 		"golden.title": "金板",
-		"golden.intro": "金板是用实物拍出来的假想图。检查区域以金板上的遮罩（Mask）为准，并且比实物略小一圈（Padding 留边），以防止边缘过杀。先画金属（Metal）遮罩，SR 遮罩自动生成（绿色）。",
+		"golden.intro": "金板是用实物拍出来的假想图。先画金属（Metal）遮罩，SR 遮罩自动生成（绿色）。图上涂成品红色（或所选颜色）的区域才是最终的检查区域，它比画出来的金属小一圈（Padding 留边），以防止边缘过杀。",
 
 		"golden.section.source": "图片",
 		"golden.channel":        "通道",
@@ -49,11 +49,12 @@ func init() {
 		"golden.color.yellow":    "黄",
 		"golden.color.cyan":      "青",
 		"golden.color.blue":      "蓝",
-		"golden.color.magenta":   "紫",
+		"golden.color.magenta":   "品红",
 		"golden.display.opacity": "不透明度 %",
 		"golden.display.mask":    "显示检查区域（金属）",
-		"golden.display.band":    "显示留边（不检查）",
+		"golden.display.band":    "显示留边（Padding 与 UserMask 去掉的部分，蓝色）",
 		"golden.display.sr":      "显示 SR 遮罩（绿色）",
+		"golden.display.note":    "品红色（或所选颜色）就是最终的检查区域，已经减去了 Padding，所以比画出来的金属小一圈；绿色是 SR 检查区域。",
 
 		"golden.undo": "撤销",
 		"golden.auto": "自动生成",
@@ -87,12 +88,12 @@ func init() {
 
 		"golden.help.1": "金属遮罩：先用“二值化范围”把金属选出来，再用 Open / Close 去掉毛刺、补齐缺口。",
 		"golden.help.2": "用“添加 / 擦除”配合矩形、椭圆或多边形精修；添加时可设“仅亮度 ≥ GV”，只收框内足够亮的像素。",
-		"golden.help.3": "Padding 留边决定检查区域比遮罩小多少；SR 遮罩由设计图自动生成，可调内缩像素。",
+		"golden.help.3": "图上涂成品红色的区域就是最终的检查区域：Padding 留边决定它比画出来的金属小多少；SR 遮罩由设计图自动生成，可调内缩像素。",
 		"golden.help.4": "点“确定金板”保存；之后检测只检查遮罩内的像素。",
 	}, map[string]string{
 		"tab.golden":   "Golden Board",
 		"golden.title": "Golden board",
-		"golden.intro": "The golden board is an imagined picture of the real product. What is inspected follows the masks drawn here, slightly smaller than the metal (Padding), so the edges are not over-rejected. Draw the Metal mask first; the SR mask is generated automatically in green.",
+		"golden.intro": "The golden board is an imagined picture of the real product. Draw the Metal mask first; the SR mask is generated automatically in green. The area painted magenta (or the chosen colour) is the final inspection area, slightly smaller than the drawn metal (Padding), so the edges are not over-rejected.",
 
 		"golden.section.source": "Picture",
 		"golden.channel":        "Channel",
@@ -140,8 +141,9 @@ func init() {
 		"golden.color.magenta":   "Magenta",
 		"golden.display.opacity": "Opacity %",
 		"golden.display.mask":    "Show the inspected area (Metal)",
-		"golden.display.band":    "Show the padding band (not inspected)",
+		"golden.display.band":    "Show removed band (Padding and UserMask, blue)",
 		"golden.display.sr":      "Show the SR mask (green)",
+		"golden.display.note":    "The painted colour (magenta by default) is the final inspection area, already smaller than the drawn Metal by the Padding; green is the SR inspection area.",
 
 		"golden.undo": "Undo",
 		"golden.auto": "Generate automatically",
@@ -175,12 +177,12 @@ func init() {
 
 		"golden.help.1": "Metal mask: select the metal with the threshold range, then use Open / Close to remove spurs and fill gaps.",
 		"golden.help.2": "Refine with Add / Erase and a rectangle, ellipse or polygon; Add can require a minimum GV, so only bright enough pixels inside the shape are taken.",
-		"golden.help.3": "Padding sets how much smaller the inspected area is than the mask; the SR mask is generated from the design and its inset can be adjusted.",
+		"golden.help.3": "The area painted magenta is the final inspection area: Padding sets how much smaller it is than the drawn metal. The SR mask is generated from the design and its inset can be adjusted.",
 		"golden.help.4": "Press Confirm to save; the inspection then only looks inside the masks.",
 	}, map[string]string{
 		"tab.golden":   "골든 보드",
 		"golden.title": "골든 보드",
-		"golden.intro": "골든 보드는 실물을 촬영해 만든 가상 제품도입니다. 검사 영역은 골든 보드의 마스크를 기준으로 하며, 실물보다 Padding 만큼 작게 잡아 가장자리 과검을 막습니다. 먼저 메탈(Metal) 마스크를 그리고, SR 마스크는 초록색으로 자동 생성됩니다.",
+		"golden.intro": "골든 보드는 실물을 촬영해 만든 가상 제품도입니다. 먼저 메탈(Metal) 마스크를 그리고, SR 마스크는 초록색으로 자동 생성됩니다. 그림에서 마젠타색(또는 선택한 색)으로 칠해진 영역이 최종 검사 영역이며, 그린 메탈보다 Padding 만큼 작아 가장자리 과검을 막습니다.",
 
 		"golden.section.source": "이미지",
 		"golden.channel":        "채널",
@@ -225,11 +227,12 @@ func init() {
 		"golden.color.yellow":    "노랑",
 		"golden.color.cyan":      "청록",
 		"golden.color.blue":      "파랑",
-		"golden.color.magenta":   "자주",
+		"golden.color.magenta":   "마젠타",
 		"golden.display.opacity": "불투명도 %",
 		"golden.display.mask":    "검사 영역(메탈) 표시",
-		"golden.display.band":    "여백(검사 안 함) 표시",
+		"golden.display.band":    "제외 영역 표시 (Padding 및 UserMask 로 제외, 파랑)",
 		"golden.display.sr":      "SR 마스크(초록) 표시",
+		"golden.display.note":    "칠해진 색(기본 마젠타)이 최종 검사 영역입니다. 그린 메탈보다 Padding 만큼 작으며, 초록색은 SR 검사 영역입니다.",
 
 		"golden.undo": "실행 취소",
 		"golden.auto": "자동 생성",
@@ -263,7 +266,7 @@ func init() {
 
 		"golden.help.1": "메탈 마스크: 먼저 '이진화 범위'로 메탈을 선택하고, Open / Close 로 돌출부를 없애고 홈을 메웁니다.",
 		"golden.help.2": "'추가 / 지우기'와 사각형, 타원, 다각형으로 다듬습니다. 추가 시 '밝기 ≥ GV'를 두면 도형 안의 충분히 밝은 픽셀만 들어갑니다.",
-		"golden.help.3": "Padding 여백은 검사 영역이 마스크보다 얼마나 작은지 정합니다. SR 마스크는 설계도에서 자동 생성되며 내축 픽셀을 조절할 수 있습니다.",
+		"golden.help.3": "그림에서 마젠타색으로 칠해진 영역이 최종 검사 영역입니다: Padding 여백이 그린 메탈보다 얼마나 작은지 정합니다. SR 마스크는 설계도에서 자동 생성되며 내축 픽셀을 조절할 수 있습니다.",
 		"golden.help.4": "'골든 보드 확정'을 눌러 저장하세요. 이후 검사는 마스크 안의 픽셀만 봅니다.",
 	})
 }

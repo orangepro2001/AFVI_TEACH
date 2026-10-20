@@ -25,7 +25,7 @@ const (
 var goldenColors = [...]struct {
 	key string
 	rgb [3]uint8
-}{{"red", [3]uint8{255, 0, 0}}, {"yellow", [3]uint8{255, 255, 0}}, {"cyan", [3]uint8{0, 255, 255}}, {"blue", [3]uint8{0, 128, 255}}, {"magenta", [3]uint8{255, 0, 255}}}
+}{{"magenta", [3]uint8{255, 0, 255}}, {"red", [3]uint8{255, 0, 0}}, {"yellow", [3]uint8{255, 255, 0}}, {"cyan", [3]uint8{0, 255, 255}}, {"blue", [3]uint8{0, 128, 255}}}
 
 // GoldenPanel is the golden board page: it edits the Metal mask and the settings of the
 // golden board. The column widgets live in panel_golden_ui.go.
@@ -185,7 +185,7 @@ func (p *GoldenPanel) Overlay(o *Overlay) {
 	if p.tool == goldenToolPoint || o == nil {
 		return
 	}
-	p.frame.Draw(o, p.hx, p.hy, rgba(255, 255, 0, 255))
+	p.frame.Draw(o, p.hx, p.hy, rgba(255, 255, 255, 255))
 }
 
 // Hover returns the grey value and the mask membership of the pixel.

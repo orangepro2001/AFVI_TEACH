@@ -102,7 +102,7 @@ func (p *DefectPanel) AlignState() alignState {
 		return alignWorking
 	}
 	// The template follows the golden board: a changed board is aligned to again.
-	if g := p.a.goldenBoard(); g != nil && g.Ready() && p.alignOut.GoldenRev != g.Rev() {
+	if g := p.a.goldenBoard(); g != nil && g.Ready() && p.alignOut.GoldenRev != g.AlignRev() {
 		return alignWorking
 	}
 	if p.alignOut.Usable {

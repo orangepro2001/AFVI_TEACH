@@ -601,6 +601,8 @@ type DefectPanel struct {
 	dragging  bool
 	dragStart core.Point
 	dragCur   core.Point
+
+	um userMaskUI // the UserMask section (detect mode): regions that are not inspected
 }
 
 func newDefectPanel(a *App, mode defectMode) *DefectPanel {
@@ -645,6 +647,7 @@ func newDefectPanel(a *App, mode defectMode) *DefectPanel {
 		autoSeed:          defaultAutoSeed,
 		productOpts:       core.DefaultProductOptions(),
 		productLenScale:   1,
+		um:                newUserMaskUI(),
 	}
 	// A real capture is slightly misaligned; the teach program starts with the camera default,
 	// the studio stays aligned because painting needs the nominal position.
@@ -686,12 +689,14 @@ func (p *DefectPanel) Deactivate() {
 	if p.frame != nil {
 		p.frame.Reset()
 	}
+	p.userMaskStop()
 	if p.a != nil && p.a.Viewer != nil {
 		p.a.Viewer.SetDoubleClickFit(true)
 	}
 }
 
 func (p *DefectPanel) ModelLoaded() {
+	p.userMaskStop()
 	p.resetSnap()
 	p.strokes = nil
 	p.lastReport = nil
@@ -886,9 +891,9 @@ func (p *DefectPanel) requestRun() {
 	if g := a.goldenBoard(); g != nil {
 		goldenBlocked = !g.Ready() || g.Empty()
 		if !goldenBlocked {
-			tplClasses, tplGoldenRev = g.Derived().classes, g.Rev()
-			if p.goldenRev != g.Rev() {
-				p.goldenRev = g.Rev()
+			tplClasses, tplGoldenRev = g.Derived().classes, g.AlignRev()
+			if p.goldenRev != g.LearnRev() {
+				p.goldenRev = g.LearnRev()
 				p.learned = [3]bool{}
 			}
 		}
@@ -1561,6 +1566,16 @@ func (p *DefectPanel) handleKeys() {
 		// Esc closes the parameter dialog first; the frame tool must not react to it.
 		return
 	}
+	if p.um.active {
+		if imgui.IsKeyPressedBool(imgui.KeyEscape) {
+			p.userMaskStop()
+			p.a.SetHint("")
+		}
+		if imgui.IsKeyPressedBool(imgui.KeyBackspace) && !imgui.CurrentIO().WantTextInput() {
+			p.um.frame.Undo()
+		}
+		return
+	}
 	if p.tool != toolFrame || p.frame == nil {
 		return
 	}
@@ -1842,6 +1857,10 @@ func (p *DefectPanel) DrawLeft() {
 			p.paramsOpen = true
 		}
 		Note(T("defect.params.f1hint"))
+	}
+
+	if p.mode == modeDetect {
+		p.drawUserMaskSection()
 	}
 
 	if p.mode == modeAuthor && SectionClosed(T("defect.section.random"), "defect-random") {
@@ -2334,6 +2353,9 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 	if !p.warped() {
 		p.drawSelectionOverlay(o)
 	}
+	if p.mode == modeDetect {
+		p.userMaskOverlay(o)
+	}
 	if p.probeRect != nil {
 		o.DashedRect(p.probeRect.X, p.probeRect.Y, p.probeRect.W, p.probeRect.H, OverlayProbe, 1.5)
 	}
@@ -2347,6 +2369,9 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 }
 
 func (p *DefectPanel) Pointer(ev PointerEvent) bool {
+	if p.mode == modeDetect && p.um.active {
+		return p.userMaskPointer(ev)
+	}
 	if p.mode == modeAuthor && p.warped() {
 		return false // painting and selecting work in the product's own coordinates
 	}

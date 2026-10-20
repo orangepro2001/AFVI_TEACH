@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"reflect"
 
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/golden"
@@ -34,13 +35,17 @@ const (
 // goldenDerived is what the inspection and the page use of a board: immutable once built.
 type goldenDerived struct {
 	rev          int
-	metalInspect *golden.Mask // the drawn Metal mask eroded by the padding
-	sr           *golden.Mask // automatic SR mask
+	metalInspect *golden.Mask // the drawn Metal mask eroded by the padding, minus the UserMask Metal regions
+	sr           *golden.Mask // automatic SR mask, minus the UserMask SR regions
 	material     []uint8      // inspection material map: 3 Metal, 1 SR, 0 elsewhere
 	classes      []uint8      // class map of the whole golden picture (3 drawn Metal, 1 SR layer, 2 Open layer, 0 base): the alignment template is painted from it
 	metalPx      int          // pixels of metalInspect
-	bandPx       int          // pixels of the padding band (drawn minus inspected)
+	bandPx       int          // pixels of the drawn Metal that are not inspected (Padding band and UserMask)
 	srPx         int          // pixels of sr
+	metalPadded  *golden.Mask // metalInspect before the UserMask (a UserMask edit starts from it)
+	srAuto       *golden.Mask // sr before the UserMask
+	userMetalPx  int          // Metal pixels the UserMask removed
+	userSRPx     int          // SR pixels the UserMask removed
 }
 
 // goldenSnap is one entry of the undo history.
@@ -53,19 +58,22 @@ type goldenSnap struct {
 type goldenOpKind int
 
 const (
-	opInit   goldenOpKind = iota // load the saved board or derive the automatic one
-	opAuto                       // derive the automatic board again
-	opRange                      // mask = threshold of the picture
-	opMorph                      // open / close / erode / dilate
-	opAdd                        // add a shape
-	opErase                      // erase a shape
-	opArea                       // area threshold
-	opUndo                       // bring the previous mask back
-	opLoad                       // load the saved board
-	opSave                       // save the board
-	opDerive                     // padding or SR inset changed
-	opSource                     // channel changed: new golden sample picture
-	opRepack                     // repaint the picture
+	opInit       goldenOpKind = iota // load the saved board or derive the automatic one
+	opAuto                           // derive the automatic board again
+	opRange                          // mask = threshold of the picture
+	opMorph                          // open / close / erode / dilate
+	opAdd                            // add a shape
+	opErase                          // erase a shape
+	opArea                           // area threshold
+	opUndo                           // bring the previous mask back
+	opLoad                           // load the saved board
+	opSave                           // save the board
+	opDerive                         // padding or SR inset changed
+	opSource                         // channel changed: new golden sample picture
+	opRepack                         // repaint the picture
+	opUserAdd                        // add a UserMask region
+	opUserRemove                     // remove one UserMask region
+	opUserClear                      // remove the UserMask regions of a target (or all)
 )
 
 // goldenOp is one queued request. Values that the page edits live on the board (padding, inset,
@@ -80,6 +88,9 @@ type goldenOp struct {
 	minGV   int
 	minArea int
 	fill    bool
+	target  golden.Target // UserMask: the area a region applies to (add, clear)
+	region  golden.Region // UserMask: region to remove (found by value, so queued removals never hit a shifted index)
+	all     bool          // UserMask: clear every region
 }
 
 // goldenInput is everything a golden job may use. All of it is captured on the UI thread before
@@ -101,6 +112,7 @@ type goldenInput struct {
 	appOut  bool
 	padding int
 	srInset int
+	user    golden.UserMask
 	derived *goldenDerived
 	snap    *goldenSnap
 	view    goldenView
@@ -118,6 +130,8 @@ type goldenResult struct {
 	channel  core.CameraChannel
 	padding  int
 	srInset  int
+	user     golden.UserMask
+	userOnly bool // only the UserMask changed (no re-alignment, the learned intervals stay)
 	derived  *goldenDerived
 	pic      []byte
 	changed  bool // the mask or its range changed
@@ -136,7 +150,11 @@ type goldenBoard struct {
 	a     *App
 	scene *Scene
 	gen   int // bumped when a model is loaded: results of older jobs are dropped
-	rev   int // bumped whenever the masks, padding or inset changed what is inspected
+	rev   int // bumped whenever the masks, padding, inset or UserMask changed what is inspected
+	// learnRev is rev without the UserMask edits: the detection learns its intervals again when it
+	// changes. alignRev only changes with the drawn Metal mask (the alignment template is painted from it).
+	learnRev int
+	alignRev int
 
 	channel  core.CameraChannel
 	low      int // requested range (what the page shows)
@@ -147,6 +165,7 @@ type goldenBoard struct {
 	appOut   bool
 	padding  int
 	srInset  int
+	user     golden.UserMask // regions the user excludes from the inspection (defect page)
 	metal    *golden.Mask
 	src      *core.GrayImage
 	srcCh    core.CameraChannel
@@ -207,8 +226,11 @@ func (g *goldenBoard) modelLoaded(scene *Scene) {
 	}
 	g.gen++
 	g.rev++
+	g.learnRev++
+	g.alignRev++
 	g.scene = scene
 	g.metal, g.src, g.geo, g.derived = nil, nil, nil, nil
+	g.user = golden.UserMask{}
 	g.history = nil
 	g.hasLast = false
 	g.queue = nil
@@ -238,6 +260,57 @@ func (g *goldenBoard) Rev() int {
 		return 0
 	}
 	return g.rev
+}
+
+// LearnRev counts the changes after which the intervals have to be learned again (every change of
+// what is inspected except the UserMask edits, which keep the user's tuned intervals).
+func (g *goldenBoard) LearnRev() int {
+	if g == nil {
+		return 0
+	}
+	return g.learnRev
+}
+
+// AlignRev counts the changes of the drawn Metal mask: the alignment template follows it.
+func (g *goldenBoard) AlignRev() int {
+	if g == nil {
+		return 0
+	}
+	return g.alignRev
+}
+
+// UserMask returns the regions the user excludes from the inspection (zero value when none). The
+// value is shared with the board and replaced, never modified: read it, do not change it.
+func (g *goldenBoard) UserMask() golden.UserMask {
+	if g == nil {
+		return golden.UserMask{}
+	}
+	return g.user
+}
+
+// AddUserRegion queues a region that is not inspected: a Metal region removes only inspected Metal
+// pixels, an SR region only inspected SR pixels. Invalid shapes are ignored.
+func (g *goldenBoard) AddUserRegion(t golden.Target, sh golden.Shape) {
+	if g == nil || !(golden.Region{Target: t, Shape: sh}).Valid() {
+		return
+	}
+	g.enqueue(goldenOp{kind: opUserAdd, target: t, shape: sh})
+}
+
+// RemoveUserRegion queues the removal of region i of UserMask().
+func (g *goldenBoard) RemoveUserRegion(i int) {
+	if g == nil || i < 0 || i >= len(g.user.Regions) {
+		return
+	}
+	g.enqueue(goldenOp{kind: opUserRemove, region: g.user.Regions[i].Clone()})
+}
+
+// ClearUserMask queues the removal of every region (all) or of the regions of target t.
+func (g *goldenBoard) ClearUserMask(all bool, t golden.Target) {
+	if g == nil {
+		return
+	}
+	g.enqueue(goldenOp{kind: opUserClear, all: all, target: t})
 }
 
 // Busy reports a running or queued request.
@@ -552,6 +625,7 @@ func (g *goldenBoard) start(op goldenOp) bool {
 		appOut:  g.appOut,
 		padding: g.padding,
 		srInset: g.srInset,
+		user:    g.user,
 		derived: g.derived,
 		view:    g.view,
 		wantPic: g.pageActive(),
@@ -622,6 +696,7 @@ func (g *goldenBoard) apply(gen int, in goldenInput, r *goldenResult, err error)
 	}
 	g.src, g.srcCh, g.geo = r.src, r.srcCh, r.geo
 	if r.changed {
+		g.alignRev++
 		if !r.restore && in.metal != nil && !(in.op.kind == opRange && g.hasLast && g.lastKind == opRange) {
 			g.history = append(g.history, goldenSnap{metal: in.metal, lo: in.appLo, hi: in.appHi, out: in.appOut})
 			if len(g.history) > goldenHistory {
@@ -637,17 +712,25 @@ func (g *goldenBoard) apply(gen int, in goldenInput, r *goldenResult, err error)
 		g.confirmed = r.loaded
 	} else if r.metal != nil && g.metal == nil {
 		g.metal = r.metal
+		g.alignRev++
 	}
 	if r.loaded {
 		g.padding, g.srInset = r.padding, r.srInset
 		g.channel = r.channel
 	}
+	if r.userOnly || in.op.kind == opDerive || in.op.kind == opSource {
+		g.confirmed = false
+	}
+	g.user = r.user
 	if r.saved {
 		g.confirmed = true
 	}
 	derivedChanged := r.derived != nil
 	if derivedChanged {
 		g.rev++
+		if !r.userOnly {
+			g.learnRev++
+		}
 		r.derived.rev = g.rev
 		g.derived = r.derived
 	}
@@ -676,6 +759,7 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 		src: in.src, srcCh: in.srcCh, geo: in.geo, metal: in.metal,
 		lo: in.appLo, hi: in.appHi, out: in.appOut,
 		channel: in.channel, padding: in.padding, srInset: in.srInset,
+		user: in.user,
 	}
 	op := in.op
 
@@ -731,6 +815,7 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 		r.geo = geo
 	}
 
+	userEdit := false
 	setAuto := func() {
 		auto := goldenAutoMetal(r.src, r.geo)
 		r.metal = auto.Metal
@@ -753,6 +838,7 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 			r.metal = saved.Metal
 			r.lo, r.hi, r.out = saved.Settings.Low, saved.Settings.High, saved.Settings.OutRange
 			r.padding, r.srInset = saved.Settings.Padding, saved.Settings.SRInset
+			r.user = saved.User.Clone()
 			r.changed, r.loaded = true, true
 			r.msgKey = "golden.msg.loaded"
 			r.msgErr = false
@@ -795,6 +881,24 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 		r.metal = in.snap.metal
 		r.lo, r.hi, r.out = in.snap.lo, in.snap.hi, in.snap.out
 		r.changed, r.restore = true, true
+	case opUserAdd:
+		r.user = in.user.With(golden.Region{Target: op.target, Shape: op.shape})
+		userEdit = true
+	case opUserRemove:
+		for j, ur := range in.user.Regions {
+			if reflect.DeepEqual(ur, op.region) {
+				r.user = in.user.Without(j)
+				break
+			}
+		}
+		userEdit = true
+	case opUserClear:
+		if op.all {
+			r.user = golden.UserMask{}
+		} else {
+			r.user = in.user.WithoutTarget(op.target)
+		}
+		userEdit = true
 	case opSave:
 		b := &golden.Board{
 			Model: in.model,
@@ -803,6 +907,7 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 				Padding: in.padding, SRInset: in.srInset,
 			},
 			Metal: r.metal,
+			User:  r.user,
 		}
 		if err := golden.Save(in.dir, b); err != nil {
 			return nil, err
@@ -812,9 +917,28 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 		return r, nil
 	}
 
-	// Derive the inspection masks when the mask, the padding or the inset changed.
-	if r.changed || op.kind == opDerive || in.derived == nil {
-		d, err := goldenDerive(r.metal, r.geo, r.padding, r.srInset)
+	// A UserMask edit that changed nothing (invalid region, index out of range) needs no new masks.
+	if userEdit {
+		if len(r.user.Regions) == len(in.user.Regions) && !r.changed {
+			r.user = in.user
+			r.msgKey = ""
+			return r, nil
+		}
+		r.userOnly = !r.changed
+	}
+
+	// A UserMask edit starts from the masks before the UserMask: no erosion, no class map.
+	if r.userOnly && in.derived != nil && in.derived.metalPadded != nil && in.derived.srAuto != nil {
+		d, err := goldenDeriveUser(in.derived, r.user)
+		if err != nil {
+			return nil, err
+		}
+		r.derived = d
+	}
+
+	// Derive the inspection masks when the mask, the padding, the inset or the UserMask changed.
+	if r.derived == nil && (r.changed || userEdit || op.kind == opDerive || in.derived == nil) {
+		d, err := goldenDerive(r.metal, r.geo, r.padding, r.srInset, r.user)
 		if err != nil {
 			return nil, err
 		}
@@ -834,8 +958,9 @@ func goldenRun(in goldenInput) (*goldenResult, error) {
 	return r, nil
 }
 
-// goldenDerive builds the inspection masks and the material map of a drawn Metal mask.
-func goldenDerive(metal *golden.Mask, geo *goldenGeometry, padding, srInset int) (*goldenDerived, error) {
+// goldenDerive builds the inspection masks and the material map of a drawn Metal mask. The UserMask
+// regions are cut out last, each from its own area only.
+func goldenDerive(metal *golden.Mask, geo *goldenGeometry, padding, srInset int, user golden.UserMask) (*goldenDerived, error) {
 	if !metal.Valid() {
 		return nil, errors.New("golden: no Metal mask")
 	}
@@ -847,6 +972,8 @@ func goldenDerive(metal *golden.Mask, geo *goldenGeometry, padding, srInset int)
 	if d.sr == nil {
 		d.sr = golden.NewMask(metal.W, metal.H)
 	}
+	d.metalPadded, d.srAuto = d.metalInspect, d.sr
+	d.metalInspect, d.sr, d.userMetalPx, d.userSRPx = golden.ApplyUser(d.metalPadded, d.srAuto, user)
 	d.material = golden.Material(d.metalInspect, d.sr)
 	if d.material == nil {
 		return nil, errors.New("golden: cannot build the material map")
@@ -855,6 +982,21 @@ func goldenDerive(metal *golden.Mask, geo *goldenGeometry, padding, srInset int)
 	d.metalPx = d.metalInspect.Count()
 	d.srPx = d.sr.Count()
 	d.bandPx = metal.Count() - d.metalPx
+	return d, nil
+}
+
+// goldenDeriveUser builds the derived masks of a UserMask edit from the masks before the UserMask of
+// prev (the drawn Metal mask, Padding and SR inset did not change): the class map is shared.
+func goldenDeriveUser(prev *goldenDerived, user golden.UserMask) (*goldenDerived, error) {
+	d := &goldenDerived{metalPadded: prev.metalPadded, srAuto: prev.srAuto, classes: prev.classes}
+	d.metalInspect, d.sr, d.userMetalPx, d.userSRPx = golden.ApplyUser(d.metalPadded, d.srAuto, user)
+	d.material = golden.Material(d.metalInspect, d.sr)
+	if d.material == nil {
+		return nil, errors.New("golden: cannot build the material map")
+	}
+	d.metalPx = d.metalInspect.Count()
+	d.srPx = d.sr.Count()
+	d.bandPx = prev.bandPx + prev.metalPx - d.metalPx
 	return d, nil
 }
 

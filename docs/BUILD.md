@@ -46,6 +46,23 @@
 ./scripts/build-wsl.sh --version 1.0 --reference reference   # 安装包的版本号 / 连同机台数据
 ```
 
+#### 交付：提交、推送、把安装包放到桌面
+
+构建脚本可以在构建完成后顺带做交付动作，**全部默认关闭**，由 `scripts/ship-wsl.sh`（Windows 原生是 `scripts\ship.ps1`）完成：
+
+```bash
+./scripts/build-wsl.sh --commit "提交说明" --desktop     # 检查通过后提交，再把本地构建的安装包放到 Windows 桌面
+./scripts/build-wsl.sh --commit "提交说明" --push --fetch --no-installer   # 提交、推送，等服务器构建好 nightly，把它下载到桌面
+./scripts/build-wsl.sh --desktop-dir /mnt/d/out           # 放到指定文件夹而不是桌面
+./scripts/ship-wsl.sh fetch --wait 900                    # 单独使用：等待并下载 nightly（--ref v0.1.0 取某个正式版，--any 不核对提交）
+```
+
+- `--commit MESSAGE`：gofmt、vet、测试和三个程序都通过之后才提交；只做**一次**提交，不 amend、不 `--no-verify`。暂存区里已经有内容时拒绝（避免把别的改动混进来）；暂存的是工作区里已跟踪文件的改动、删除，以及 `.gitignore` 没有忽略的新文件，超过 5 MB 的新文件会被拒绝。提交发生在安装包之前，所以安装包的版本号指向这次提交，而不是带 `-dirty`。没有任何改动时只提示 `Nothing to commit.`。
+- `--push`：单独的开关，`--commit` 不会自动推送。执行 `git push origin <当前分支>`，不加 `--force`。
+- `--desktop`：把最近一次构建的安装包（`package-wsl.sh` 记录在 `dist/.last-installer`）复制到 Windows 桌面，目录向 Windows 询问（桌面被 OneDrive 重定向也能找到），复制后核对 sha256。`--desktop-dir DIR` 改放到 DIR。
+- `--fetch`：服务器只构建已推送到 `main` 的提交，所以要先 `--push`（或该提交已经推送）。脚本每 15 秒检查一次 GitHub Release `nightly`（最多 15 分钟），其安装包文件名里的短哈希必须是当前 `HEAD`，否则不会交付过期的安装包；下载后用 Release 里的 `SHA256SUMS.txt` 校验。只需要 `curl` 和 `sha256sum`，不需要 token。与 `--no-installer` 一起用可以省掉本地打包。
+- `build.ps1` 对应 `-Commit`、`-Push`、`-Desktop`、`-DesktopDir`、`-Fetch`。
+
 输出：`bin/teach-imgui.exe` (~7 MB)、`bin/camera-gui.exe` 与 `bin/camera.exe`（纯 Go，无 cgo），以及最后一步生成的安装包 `dist/AFVI-Teach-Setup-<版本>.exe`（见下一节）。一键构建的最后一步是 `package-wsl.sh --no-build`，直接打包刚构建的 `bin/` 里的三个 exe；`--offline`、`--version`、`--reference` 会原样传给它。
 
 构建脚本会用 windres 把图标资源脚本编译成 `cmd/teach-imgui/rsrc_windows_amd64.syso` 与 `cmd/camera-gui/rsrc_windows_amd64.syso`（已被 git 忽略；没有 windres 时 exe 仍能构建，只是使用默认图标）。`go run ./cmd/mkicon` 重新生成 `assets/icons/*.ico`，详见 [ICON.md](ICON.md)。
@@ -221,7 +238,7 @@ AFVI_TEACH/
 │   ├── camera/       # 相机渲染与命令行（纯 Go，无 cgo）
 │   └── installer/    # 安装包载荷、解压、安装日志、卸载、PATH 编辑与文字（纯 Go，仅标准库）
 ├── configs/          # 机台配置示例（afvi.example.toml）
-├── scripts/          # build-wsl.sh / package-wsl.sh（WSL2）、build.ps1 / package.ps1（Windows）
+├── scripts/          # build-wsl.sh / package-wsl.sh / ship-wsl.sh（WSL2）、build.ps1 / package.ps1 / ship.ps1（Windows）
 ├── deploy/server/    # 构建服务器：ci 驱动脚本、install.sh、systemd 单元（见 SERVER_CI.md）
 ├── docs/             # BUILD.md、SERVER_CI.md、USAGE.md、LINK.md、REFERENCE_SETUP.md
 ├── reference/        # 机台测试数据（需单独配置）

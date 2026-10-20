@@ -96,5 +96,7 @@ $mk = @('-root', $Root, '-bin', $binDir, '-stub', $stub, '-out', $Out, '-version
 if ($Reference -ne '') { $mk += @('-reference', $Reference) }
 Invoke-Checked 'mkinstaller' { & go run ./cmd/mkinstaller @mk }
 Remove-Item -LiteralPath $stub -Force
+# ship.ps1 desktop picks the installer up from here.
+Set-Content -LiteralPath (Join-Path $distDir '.last-installer') -Value $Out -Encoding ASCII
 
 Write-Host "OK: $Out"
