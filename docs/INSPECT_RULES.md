@@ -43,3 +43,7 @@
 材质对象新增 `"intervalOff": false`、`"abs": {"enabled","bright","dark","brightSize","darkSize"}`、`"pct": {同左}`；
 Params 对象新增 `"tileSize": 400`、`"tileSmooth": false`。读取时缺少的字段保持 `DefaultParams()` 的值（包括材质对象里缺的字段，
 例如旧文件里的材质没有 abs/pct，读出后 Abs/Pct 是 `defaultAbsRule()`/`defaultPctRule()` 的值，TileSize 是 400）。
+
+## 无数据像素（Regions.Skip）
+
+对位后的图在边缘会有“拍摄时没有数据”的像素（位移打开的边框，用最近的有效像素补齐，再加上图像最外一圈 `core.AlignBorderPx` = 8 像素，因为残余对位误差和插值无法保证最外圈）。`Regions.Skip[i]` 为 true 的像素被当作另一种材质：它本身和它周围 EdgeMargin 以内的像素一起被排除，不参与统计、`Learn`、标记和探查（`Report.EdgeIgnored` 计入）。`Skip` 是对位的几何结果，不含任何模拟信息；长度必须等于宽×高，否则报错；为 nil 时与以前完全相同。

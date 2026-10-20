@@ -37,20 +37,12 @@ func newTestApp(t *testing.T, p Profile) *App {
 	}
 	a.modelIdx = 0
 	a.Scene = scene
+	a.Viewer.noGL = true // no OpenGL context in the headless tests
+	a.align.modelLoaded(scene)
 	if dp := defectPanelOf(a); dp != nil {
 		dp.ModelLoaded()
 	}
 	return a
-}
-
-// defectPanelOf returns the *DefectPanel of a (nil if absent).
-func defectPanelOf(a *App) *DefectPanel {
-	for _, p := range a.panels {
-		if dp, ok := p.(*DefectPanel); ok {
-			return dp
-		}
-	}
-	return nil
 }
 
 // pollJobs applies finished jobs until no job is running (15 s limit).
@@ -77,8 +69,8 @@ func TestProfilePanels(t *testing.T) {
 	for _, p := range teach.panels {
 		teachIDs = append(teachIDs, p.ID())
 	}
-	if strings.Join(teachIDs, ",") != "align,defect" {
-		t.Errorf("teach panel ids = %v, want [align defect]", teachIDs)
+	if strings.Join(teachIDs, ",") != "roi,align,defect" {
+		t.Errorf("teach panel ids = %v, want [roi align defect]", teachIDs)
 	}
 	tdp := defectPanelOf(teach)
 	if tdp == nil {
@@ -188,6 +180,7 @@ func TestPaletteSupportsByMode(t *testing.T) {
 
 func TestDetectModeInspects(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")

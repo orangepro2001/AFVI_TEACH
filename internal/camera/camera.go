@@ -34,7 +34,10 @@ type Result struct {
 	Frames map[ImageKey]snap.Frame
 }
 
-// DefaultRecipe is the camera's default scenario for a scene.
+// DefaultRecipe is the camera's default scenario for a scene. Like a real camera it is slightly
+// misaligned: the product is shifted by a few pixels and rotated by a fraction of a degree
+// (core.DefaultCaptureWarp). The good sample stays at the nominal position because Render always
+// renders it un-warped; only the test image moves.
 func DefaultRecipe(scene *model.Scene, count int, seed uint32) snap.Recipe {
 	light := core.DefaultLightSetting()
 	light.Channels = []core.LightChannel{
@@ -49,7 +52,7 @@ func DefaultRecipe(scene *model.Scene, count int, seed uint32) snap.Recipe {
 	if scene != nil {
 		defects = core.DefaultTinyDefects(scene.Material, scene.W, scene.H, count, seed, core.DefaultTinyEdgeMargin)
 	}
-	return snap.NewRecipe(product, light, noise, defects, nil)
+	return snap.NewRecipe(product, light, noise, defects, nil).WithWarp(core.DefaultCaptureWarp())
 }
 
 // NewMeta builds the description without images.

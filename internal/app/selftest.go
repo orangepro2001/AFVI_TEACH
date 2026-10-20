@@ -42,6 +42,7 @@ type Selftest struct {
 	deadline    time.Time
 	seq         []viewerInput
 	seqIdx      int
+	flow        *AlignFlow
 }
 
 type selftestStep struct {
@@ -2455,6 +2456,10 @@ func NewSelftest(a *App, out string) *Selftest {
 			},
 		},
 	)
+	s.steps = insertBefore(s.steps, "teach-start", s.legacyStep())
+	s.steps = append(s.steps, s.flowSteps()...)
+	s.steps = append(s.steps, s.roleSteps()...)
+	s.steps = append(s.steps, s.studioRoleSteps()...)
 	s.steps = filterSteps(s.steps, a.profile)
 	if a.live != nil && a.live.cli != nil {
 		// -link was given to the teaching program: the other steps run on the program's own
@@ -2492,6 +2497,7 @@ var studioOnlySteps = map[string]bool{
 	"studio-warp":             true,
 	"studio-warp-reset":       true,
 	"studio-scenario":         true,
+	"studio-login":            true,
 }
 
 var teachOnlySteps = map[string]bool{
@@ -2545,6 +2551,16 @@ var teachOnlySteps = map[string]bool{
 	"tile-union":            true,
 	"tile-size":             true,
 	"tile-reset":            true,
+	"teach-legacy":          true,
+	"flow-attach":           true,
+	"flow-draw":             true,
+	"flow-confirm":          true,
+	"flow-edit":             true,
+	"roles-operator":        true,
+	"roles-confirm":         true,
+	"roles-inspect":         true,
+	"roles-inspect-en":      true,
+	"roles-login":           true,
 }
 
 // filterSteps keeps the steps that belong to the profile, in order.

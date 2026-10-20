@@ -11,6 +11,7 @@ import (
 
 func TestLocalFramesMatchSimulation(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -38,6 +39,7 @@ func TestLocalFramesMatchSimulation(t *testing.T) {
 
 func TestLocalFramesRebakeProduct(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -85,6 +87,7 @@ func TestSnapFetchWithoutCamera(t *testing.T) {
 		t.Skip("camera program found; set AFVI_CAMERA_EXE to an empty value to run this test")
 	}
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -107,6 +110,7 @@ func TestSnapFetchWithoutCamera(t *testing.T) {
 
 func TestSaveLocalRoundTrip(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -143,6 +147,7 @@ func TestSaveLocalRoundTrip(t *testing.T) {
 
 func TestLoadXMLScenarioWithoutCamera(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")

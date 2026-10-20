@@ -51,6 +51,9 @@ func (a *App) toggleFocus() {
 // It must be called inside the ##viewer window right after Viewer.Draw so the canvas
 // rectangle is current.
 func (a *App) drawPalette(panel Panel) {
+	if h, ok := panel.(interface{ HidePalette() bool }); ok && h.HidePalette() {
+		return
+	}
 	origin, size := a.Viewer.Canvas()
 	ps := paletteSize()
 	if size.X < ps.X+16 || size.Y < ps.Y+16 {

@@ -43,7 +43,7 @@ func TestMainList(t *testing.T) {
 func TestMainDefaultImage(t *testing.T) {
 	root := writeRef(t)
 	dir := t.TempDir()
-	code, _, errOut := run(t, "-ref", root, "-model", "FM1/synthetic-1", "-out", dir, "-channels", "red,green", "-good", "-count", "3")
+	code, _, errOut := run(t, "-ref", root, "-model", "FM1/synthetic-1", "-out", dir, "-channels", "red,green", "-good", "-count", "3", "-aligned")
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%s", code, errOut)
 	}

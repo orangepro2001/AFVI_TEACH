@@ -12,7 +12,7 @@ import (
 
 func TestRenderWarpMovesTheProduct(t *testing.T) {
 	scene := newScene(t)
-	plain := DefaultRecipe(scene, 3, 7)
+	plain := DefaultRecipe(scene, 3, 7).WithWarp(core.IdentityWarp)
 	moved := plain.WithWarp(core.WarpParams{Tx: 6, Ty: 4, Scale: 1})
 	if moved.Warp == nil {
 		t.Fatalf("warp not stored")
@@ -73,7 +73,7 @@ func TestRenderWarpMovesTheProduct(t *testing.T) {
 
 func TestPlainRecipeJSONHasNoWarp(t *testing.T) {
 	scene := newScene(t)
-	data, err := json.Marshal(DefaultRecipe(scene, 3, 7))
+	data, err := json.Marshal(DefaultRecipe(scene, 3, 7).WithWarp(core.IdentityWarp))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,9 +110,9 @@ func TestMainWarpFlags(t *testing.T) {
 	if !strings.Contains(out, "warp: dx=6 dy=-4 rot=0.5 scale=1.01") {
 		t.Fatalf("info lacks the warp line: %q", out)
 	}
-	// 没有任何 warp 参数时描述里没有 warp。
+	// 没有任何 warp 参数、但带 -aligned 时描述里没有 warp。
 	plain := t.TempDir()
-	if code, _, errOut := run(t, "-ref", root, "-model", "FM1/synthetic-1", "-out", plain); code != 0 {
+	if code, _, errOut := run(t, "-ref", root, "-model", "FM1/synthetic-1", "-out", plain, "-aligned"); code != 0 {
 		t.Fatalf("plain: code=%d stderr=%s", code, errOut)
 	}
 	pm, _, err := snap.ReadMeta(plain)

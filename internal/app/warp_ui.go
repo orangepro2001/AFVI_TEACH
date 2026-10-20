@@ -24,6 +24,7 @@ func warpPresets() []warpPreset {
 		{"slight", core.WarpParams{Scale: 1, Gain: 1, Tx: 8, Ty: -5, ThetaDeg: 0.3}},
 		{"severe", core.WarpParams{Scale: 1.01, Gain: 1, Tx: 40, Ty: 25, ThetaDeg: 1.5}},
 		{"lift", core.WarpParams{Scale: 1, Gain: 1, TiltX: 0.01, TiltY: 0.006, BendAmplitude: 6, BendWavelength: 1500}},
+		{"camera", core.DefaultCaptureWarp()},
 	}
 }
 
@@ -135,6 +136,7 @@ func init() {
 		"warp.preset.slight":     "轻微错位",
 		"warp.preset.severe":     "严重错位",
 		"warp.preset.lift":       "翘起",
+		"warp.preset.camera":     "典型错位（相机默认）",
 	}, map[string]string{
 		"defect.section.warp":    "Misalignment & Lift",
 		"defect.warp.misalign":   "Misalignment: the whole product is shifted, rotated or scaled against its nominal position.",
@@ -151,6 +153,7 @@ func init() {
 		"warp.preset.slight":     "Slight shift",
 		"warp.preset.severe":     "Severe shift",
 		"warp.preset.lift":       "Lift",
+		"warp.preset.camera":     "Camera default misalignment",
 	}, map[string]string{
 		"defect.section.warp":    "오정렬 및 들뜸",
 		"defect.warp.misalign":   "오정렬: 제품 전체가 기준 위치에서 이동·회전·확대/축소됩니다.",
@@ -167,6 +170,7 @@ func init() {
 		"warp.preset.slight":     "약간 어긋남",
 		"warp.preset.severe":     "크게 어긋남",
 		"warp.preset.lift":       "들뜸",
+		"warp.preset.camera":     "카메라 기본 어긋남",
 	})
 }
 

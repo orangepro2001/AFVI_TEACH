@@ -18,6 +18,9 @@ func liveSelftestStep(s *Selftest) selftestStep {
 		name: "live",
 		enter: func(a *App) {
 			dp := s.panel("defect").(*DefectPanel)
+			s.flow = s.a.align
+			s.a.align = nil
+			dp.warp = core.IdentityWarp
 			for i, p := range a.panels {
 				if p == Panel(dp) {
 					a.switchTab(i)

@@ -55,6 +55,17 @@ func TestDefaultRecipe(t *testing.T) {
 	if cr.Noise.Seed != 1 {
 		t.Fatalf("noise seed %d, want 1", cr.Noise.Seed)
 	}
+	want := core.DefaultCaptureWarp()
+	if got := recipe.CoreWarp(); got.Tx != want.Tx || got.Ty != want.Ty || got.ThetaDeg != want.ThetaDeg ||
+		got.Scale != want.Scale || got.ShearX != want.ShearX || got.ShearY != want.ShearY ||
+		got.TiltX != want.TiltX || got.TiltY != want.TiltY ||
+		got.BendAmplitude != want.BendAmplitude || got.BendWavelength != want.BendWavelength {
+		t.Fatalf("default warp %+v, want %+v", got, want)
+	}
+	meta := NewMeta(scene, recipe)
+	if err := meta.Validate(); err != nil {
+		t.Fatalf("default recipe is invalid: %v", err)
+	}
 }
 
 func TestRenderMatchesCore(t *testing.T) {
@@ -71,7 +82,7 @@ func TestRenderMatchesCore(t *testing.T) {
 	}
 	core.ApplyProductVariation(ls, cr.Product)
 	light := cr.Light
-	_, wantTest := core.RenderDefectPair(ls, &light, core.ChRed, cr.Scene, cr.Defects, cr.Noise)
+	_, wantTest := core.RenderDefectPairWarped(ls, &light, core.ChRed, cr.Scene, cr.Defects, cr.Noise, cr.Warp)
 	wantGood := core.RenderGoodSample(ls, &light, core.ChRed, core.GoodSampleNoise(cr.Noise))
 
 	gotTest := res.Frames[ImageKey{Channel: snap.ChannelRed, Kind: snap.KindTest}]
@@ -90,7 +101,8 @@ func TestRenderMatchesCore(t *testing.T) {
 
 func TestGoodDiffersOnlyAtDefects(t *testing.T) {
 	scene := newScene(t)
-	recipe := DefaultRecipe(scene, 3, 7)
+	// The default camera misaligns the test image; the good sample is nominal, so compare in place.
+	recipe := DefaultRecipe(scene, 3, 7).WithWarp(core.IdentityWarp)
 	res, err := Render(scene, recipe, Options{Good: true})
 	if err != nil {
 		t.Fatalf("Render: %v", err)

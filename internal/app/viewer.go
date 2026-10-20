@@ -34,6 +34,7 @@ type PointerEvent struct {
 // drags pan; a right click without movement is reported to the panel as PointerRightClick.
 type Viewer struct {
 	tex        *backend.Texture
+	noGL       bool // headless tests: remember the image size but upload no texture
 	imgW, imgH int
 	zoom       float32
 	panX, panY float32
@@ -105,7 +106,7 @@ func (v *Viewer) SetImage(w, h int, pix []byte) {
 		v.tex.Release()
 		v.tex = nil
 	}
-	if w > 0 && h > 0 && len(pix) >= 4*w*h {
+	if !v.noGL && w > 0 && h > 0 && len(pix) >= 4*w*h {
 		v.tex = backend.NewTextureFromRgba(&image.RGBA{Pix: pix[:4*w*h], Stride: 4 * w, Rect: image.Rect(0, 0, w, h)})
 	}
 	if w != v.imgW || h != v.imgH {
@@ -129,7 +130,7 @@ func (v *Viewer) Clear() {
 func (v *Viewer) ImageSize() (int, int) { return v.imgW, v.imgH }
 
 // HasImage reports whether a texture is shown.
-func (v *Viewer) HasImage() bool { return v.tex != nil }
+func (v *Viewer) HasImage() bool { return v.tex != nil || (v.noGL && v.imgW > 0 && v.imgH > 0) }
 
 // Fit scales the image to the canvas on the next frame.
 func (v *Viewer) Fit() { v.needFit = true }

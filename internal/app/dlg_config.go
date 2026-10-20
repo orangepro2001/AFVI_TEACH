@@ -6,6 +6,7 @@ import (
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/config"
 )
 
@@ -44,6 +45,9 @@ func cloneConfig(c *config.Config) *config.Config {
 
 // OpenConfigDialog prepares a fresh draft from the live config and requests the popup.
 func (a *App) OpenConfigDialog() {
+	if a.role != access.RoleAdmin {
+		return
+	}
 	d := &a.cfgDlg
 	d.draft = cloneConfig(a.Cfg)
 	d.sel = a.machineIdx
@@ -130,6 +134,9 @@ func uniqueCopyName(c *config.Config, base string) string {
 
 // drawConfigDialog draws the modal dialog; it is cheap when the popup is closed.
 func (a *App) drawConfigDialog() {
+	if a.role != access.RoleAdmin {
+		return
+	}
 	d := &a.cfgDlg
 	if d.needOpen {
 		imgui.OpenPopupStr("machine-config")

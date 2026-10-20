@@ -125,6 +125,7 @@ func (p *DefectPanel) requestLoadImage(path string) {
 			p.leaveLive()
 			p.snapSrc.on = false
 			p.user = userImage{img: img, path: path, dir: filepath.Dir(path)}
+			p.raw, p.aligned, p.alignOut = nil, nil, nil
 			p.golden, p.test = nil, nil
 			p.lastReport, p.lastProbe, p.probeRect = nil, nil, nil
 			p.renderRev++

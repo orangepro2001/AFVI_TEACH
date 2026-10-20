@@ -55,6 +55,10 @@ type Image struct {
 type Regions struct {
 	Width, Height int
 	Material      []uint8
+	// Skip is optional (nil = every pixel counts): Skip[i] marks a pixel that has no data in the
+	// image (the border an alignment shift opened). Such pixels are ignored like edge-margin
+	// pixels, and so are the pixels within EdgeMargin of them.
+	Skip []bool
 }
 
 // Rect 是矩形区域。
@@ -237,6 +241,9 @@ func validateInputs(img Image, reg Regions) error {
 	}
 	if len(reg.Material) != reg.Width*reg.Height {
 		return fmt.Errorf("材质图元素数 %d 与尺寸 %dx%d 不匹配", len(reg.Material), reg.Width, reg.Height)
+	}
+	if reg.Skip != nil && len(reg.Skip) != reg.Width*reg.Height {
+		return fmt.Errorf("Skip 掩码元素数 %d 与尺寸 %dx%d 不匹配", len(reg.Skip), reg.Width, reg.Height)
 	}
 	for i, v := range reg.Material {
 		if v > uint8(Metal) {
@@ -467,14 +474,19 @@ func countOnes(mask []uint8) int {
 
 // edgeExclusion 返回边缘排除掩码：1 表示该像素与不同材质的像素的切比雪夫距离
 // 不超过 r（在图像边界处裁剪；边界本身不会排除任何像素）。
-// r <= 0 时返回 nil。
+// reg.Skip 标记的无数据像素本身也被排除，并像另一种材质一样把它周围 r 以内的像素排除。
+// r <= 0 且没有 Skip 时返回 nil。
 func edgeExclusion(reg Regions, r int) []uint8 {
-	if r <= 0 {
-		return nil
-	}
 	w, h := reg.Width, reg.Height
 	if w <= 0 || h <= 0 {
 		return nil
+	}
+	skip := reg.Skip
+	if len(skip) != w*h {
+		skip = nil
+	}
+	if r <= 0 {
+		return orSkip(nil, skip, w*h)
 	}
 	// 边界掩码：像素在图像内存在一个 8 邻域的不同材质像素。
 	boundary := make([]uint8, w*h)
@@ -507,6 +519,7 @@ func edgeExclusion(reg Regions, r int) []uint8 {
 				for x := 0; x < w; x++ {
 					idx := base + x
 					m := reg.Material[idx]
+					sk := skip != nil && skip[idx]
 					diff := false
 					for dy := -1; dy <= 1 && !diff; dy++ {
 						ny := y + dy
@@ -522,7 +535,7 @@ func edgeExclusion(reg Regions, r int) []uint8 {
 							if nx < 0 || nx >= w {
 								continue
 							}
-							if reg.Material[nbase+nx] != m {
+							if reg.Material[nbase+nx] != m || (skip != nil && skip[nbase+nx] != sk) {
 								diff = true
 								break
 							}
@@ -536,10 +549,27 @@ func edgeExclusion(reg Regions, r int) []uint8 {
 		}(y0, y1)
 	}
 	wg.Wait()
-	if r == 1 {
-		return boundary
+	if r > 1 {
+		boundary = grow(boundary, w, h, r-1)
 	}
-	return grow(boundary, w, h, r-1)
+	return orSkip(boundary, skip, w*h)
+}
+
+// orSkip adds the no-data pixels to an exclusion mask (nil mask: a new one, nil when there is
+// no Skip either).
+func orSkip(mask []uint8, skip []bool, n int) []uint8 {
+	if skip == nil {
+		return mask
+	}
+	if mask == nil {
+		mask = make([]uint8, n)
+	}
+	for i, v := range skip {
+		if v {
+			mask[i] = 1
+		}
+	}
+	return mask
 }
 
 // Learn 根据良好样本图像学习每个启用材质的区间。

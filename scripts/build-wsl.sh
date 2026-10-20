@@ -91,9 +91,9 @@ echo "==> go vet ./..."
 go vet ./...
 
 # --- 3. config, core and inspect tests (pure Go) -----------------------------
-echo "==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/..."
+echo "==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/..."
 # Run tests natively on Linux (config, core, inspect, model, snap, camera, link, appicon and installer are pure Go)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/...
 
 # --- 3b. application icons (Windows resources) -------------------------------
 # The icon resource scripts need windres; without it the executables simply get the default icon.

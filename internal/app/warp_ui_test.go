@@ -215,6 +215,7 @@ func TestAlignDefaultsToTheOverlayView(t *testing.T) {
 	if ap == nil {
 		t.Fatal("no align panel")
 	}
+	// The teach profile now also carries the forced-alignment panels; the bench is unchanged.
 	if ap.viewKind != "overlay" {
 		t.Errorf("default view %q, want overlay", ap.viewKind)
 	}

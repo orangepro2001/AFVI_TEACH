@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/AllenDang/cimgui-go/backend"
@@ -14,16 +15,19 @@ import (
 	_ "github.com/AllenDang/cimgui-go/impl/glfw"
 	_ "github.com/AllenDang/cimgui-go/impl/opengl3"
 
+	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/model"
 )
 
-// Run runs the teaching program (align + defect detection); cmd/teach-imgui calls it.
-// It must be called from the main goroutine on a locked OS thread (GLFW and OpenGL
-// require every call to come from the main OS thread).
+// Run runs the teaching program (align bench + guided operator pages); cmd/teach-imgui
+// calls it. It starts on the operator pages unless -login is given. It must be called
+// from the main goroutine on a locked OS thread (GLFW and OpenGL require every call to
+// come from the main OS thread).
 func Run() { runProfile(ProfileTeach) }
 
 // RunStudio runs the camera studio (light + defect synthesis); cmd/camera-gui calls it
-// from a locked OS thread.
+// from a locked OS thread. It starts locked (login dialog) unless -login is given and
+// only accepts an admin login.
 func RunStudio() { runProfile(ProfileStudio) }
 
 // runProfile parses the command line, loads the machine configuration and runs the UI
@@ -40,6 +44,7 @@ func runProfile(profile Profile) {
 	exitAfter := flag.Duration("exitafter", 0, "close the window after this duration")
 	fontsize := flag.Float64("fontsize", defaultFontPx, "UI font size in pixels (10-28)")
 	linkAddr := flag.String("link", "", "live link address: the studio listens on it, the teach program dials it (default 127.0.0.1:47631, or AFVI_LINK); off disables the link")
+	login := flag.String("login", "", "start with a login, user:password (admin or operator; the studio accepts admin only)")
 	flag.Parse()
 	SetFontPx(float32(*fontsize))
 
@@ -69,6 +74,7 @@ func runProfile(profile Profile) {
 
 	a := NewApp(cfg, cfgPath, themeName, profile)
 	a.exitAfter = *exitAfter
+	startRole(flag.Visit, *login, *selftest, a, profile)
 	// The self-test walks the programs alone: it only opens the link when -link is given.
 	linkGiven := false
 	flag.Visit(func(f *flag.Flag) { linkGiven = linkGiven || f.Name == "link" })
@@ -118,9 +124,46 @@ func runProfile(profile Profile) {
 	a.closePanels()
 }
 
+// startRole applies the access level the program starts with (see JOB_CONTRACT D3):
+// the self-test authenticates the admin itself, -login is checked before the window
+// exists, without it the teaching program starts as the operator and the studio locked.
+func startRole(visited func(func(*flag.Flag)), login string, selftest bool, a *App, profile Profile) {
+	given := false
+	visited(func(f *flag.Flag) { given = given || f.Name == "login" })
+	if selftest {
+		if role, ok := access.Authenticate("admin", "1"); ok {
+			a.SetRole(role)
+		}
+		return
+	}
+	if given {
+		if login == "" || !strings.Contains(login, ":") {
+			fmt.Fprintln(os.Stderr, "-login must be user:password")
+			os.Exit(2)
+		}
+		i := strings.Index(login, ":")
+		user, password := login[:i], login[i+1:]
+		role, ok := access.Authenticate(user, password)
+		if ok && profile == ProfileStudio && role != access.RoleAdmin {
+			ok = false
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "login failed")
+			os.Exit(2)
+		}
+		a.SetRole(role)
+		return
+	}
+	if profile == ProfileStudio {
+		a.Lock()
+		return
+	}
+	a.SetRole(access.RoleOperator)
+}
+
 // closePanels lets panels release resources (temporary files) when the window has closed.
 func (a *App) closePanels() {
-	for _, p := range a.panels {
+	for _, p := range a.allPanels {
 		if c, ok := p.(interface{ Close() }); ok {
 			c.Close()
 		}

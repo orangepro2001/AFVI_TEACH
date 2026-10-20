@@ -35,6 +35,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 	noiseReadFlag := fs.Float64("noise-read", 0, "sensor noise sigma")
 	noiseShotFlag := fs.Float64("noise-shot", 0, "sensor shot gain")
 	noiseSeedFlag := fs.Uint("noise-seed", 1, "sensor noise seed")
+	alignedFlag := fs.Bool("aligned", false, "render the built-in default scenario exactly in place, without the default camera misalignment (use together with -dx/-dy/-rot to place the product exactly; ignored with -in)")
 	warpFlags := newWarpFlags(fs)
 	listFlag := fs.Bool("list", false, "print the ids of the models of the active machine")
 	infoFlag := fs.String("info", "", "print a summary of the capture at that path")
@@ -106,6 +107,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		recipe = DefaultRecipe(scene, *countFlag, uint32(*seedFlag))
+		if *alignedFlag {
+			recipe = recipe.WithWarp(core.IdentityWarp)
+		}
+		warp := recipe.CoreWarp()
 		cr := recipe.Core()
 		cr.Product.Strength = *strengthFlag
 		if *noProductFlag {
@@ -114,7 +119,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		cr.Noise.ReadSigma = *noiseReadFlag
 		cr.Noise.ShotGain = *noiseShotFlag
 		cr.Noise.Seed = uint32(*noiseSeedFlag)
-		recipe = snap.NewRecipe(cr.Product, cr.Light, cr.Noise, cr.Defects, cr.Scene)
+		recipe = snap.NewRecipe(cr.Product, cr.Light, cr.Noise, cr.Defects, cr.Scene).WithWarp(warp)
 	}
 
 	recipe, err := warpFlags.apply(fs, recipe)

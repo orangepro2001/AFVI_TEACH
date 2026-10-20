@@ -115,7 +115,7 @@ func (a *App) closeLive() {
 
 // tickPanels gives every panel that wants it its per-frame callback.
 func (a *App) tickPanels() {
-	for _, p := range a.panels {
+	for _, p := range a.allPanels {
 		if t, ok := p.(Ticker); ok {
 			t.Tick()
 		}

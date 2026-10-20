@@ -13,7 +13,7 @@ import (
 )
 
 func init() {
-	registerPanel(1, func(a *App) Panel {
+	registerPanel(2, func(a *App) Panel {
 		return &AlignPanel{
 			a:         a,
 			scale:     2,
@@ -123,6 +123,7 @@ func init() {
 		"align.view":                   "视图",
 		"align.workScale":              "工作分辨率",
 		"align.match.pyramid":          "金字塔",
+		"tab.align":                    "对位试验台",
 	}, map[string]string{
 		"align.section.source":         "Source",
 		"align.source.median":          "MEDIAN original",
@@ -216,6 +217,7 @@ func init() {
 		"align.view":                   "View",
 		"align.workScale":              "Working scale",
 		"align.match.pyramid":          "Pyramid",
+		"tab.align":                    "Align bench",
 	}, map[string]string{
 		"align.section.source":         "소스",
 		"align.source.median":          "MEDIAN 원본",
@@ -309,6 +311,7 @@ func init() {
 		"align.view":                   "뷰",
 		"align.workScale":              "작업 해상도",
 		"align.match.pyramid":          "피라미드",
+		"tab.align":                    "정렬 시험대",
 	})
 }
 

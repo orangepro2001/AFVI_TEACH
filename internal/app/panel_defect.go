@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"reflect"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func init() {
-	registerPanel(2, func(a *App) Panel { return newDefectPanel(a, modeDetect) }, ProfileTeach)
+	registerPanel(3, func(a *App) Panel { return newDefectPanel(a, modeDetect) }, ProfileTeach)
 	registerPanel(1, func(a *App) Panel { return newDefectPanel(a, modeAuthor) }, ProfileStudio)
 	Messages(map[string]string{
 		"defect.section.channel":           "渲染通道",
@@ -160,6 +161,11 @@ func init() {
 		"defect.noise.seed":                "种子",
 		"defect.noise.note":                "噪声只加到测试图；标准图视为多板中值无噪声；σ² = 读出² + 散粒系数×GV，GV 越高噪声越大。",
 		"defect.result.truncated":          "仅显示面积最大的前 {shown} 个，共 {total} 个。",
+		"defect.align.off":                 "对位未确认：请先在“对位”页确认 ROI，检测在对位完成前不会运行。",
+		"defect.align.working":             "对位中：正在用已确认的 ROI 对当前测试图对位。",
+		"defect.align.done":                "对位完成：检测使用对位后的图。",
+		"defect.align.failed":              "对位失败：检测被阻止，请在对位页调整 ROI 或参数后重试。",
+		"defect.align.reason":              "原因：{msg}",
 	}, map[string]string{
 		"defect.section.channel":           "Render Channel",
 		"defect.section.brush":             "Brush",
@@ -306,6 +312,11 @@ func init() {
 		"defect.noise.seed":                "Seed",
 		"defect.noise.note":                "Noise is added to the test image only; the golden image is treated as a multi-board median with no noise; σ² = read² + shotGain×GV, so higher GV means more noise.",
 		"defect.result.truncated":          "Showing the largest {shown} of {total}.",
+		"defect.align.off":                 "Alignment not confirmed: confirm the ROIs on the Align page first; detection does not run before the alignment is done.",
+		"defect.align.working":             "Aligning: matching the test image with the confirmed ROIs.",
+		"defect.align.done":                "Aligned: detection uses the aligned image.",
+		"defect.align.failed":              "Alignment failed: detection is blocked; fix the ROIs or parameters on the Align page and retry.",
+		"defect.align.reason":              "Reason: {msg}",
 	}, map[string]string{
 		"defect.section.channel":           "렌더링 채널",
 		"defect.section.brush":             "브러시",
@@ -452,6 +463,11 @@ func init() {
 		"defect.noise.seed":                "시드",
 		"defect.noise.note":                "노이즈는 테스트 이미지에만 추가됩니다. 기준 이미지는 다중 보드 중앙값으로 노이즈가 없다고 간주합니다. σ² = 읽기² + 샷 계수×GV 이므로 GV가 높을수록 노이즈가 큽니다.",
 		"defect.result.truncated":          "면적이 큰 상위 {shown}개만 표시합니다. 전체 {total}개.",
+		"defect.align.off":                 "정렬 미확인: 먼저 '정렬' 페이지에서 ROI를 확인하세요. 정렬이 끝나기 전에는 검출이 실행되지 않습니다.",
+		"defect.align.working":             "정렬 중: 확인된 ROI로 현재 테스트 이미지를 정렬합니다.",
+		"defect.align.done":                "정렬 완료: 검출은 정렬된 이미지를 사용합니다.",
+		"defect.align.failed":              "정렬 실패: 검출이 차단되었습니다. 정렬 페이지에서 ROI나 파라미터를 조정한 뒤 다시 시도하세요.",
+		"defect.align.reason":              "이유: {msg}",
 	})
 }
 
@@ -547,6 +563,8 @@ type DefectPanel struct {
 	golden *core.GrayImage
 	test   *core.GrayImage
 
+	defectAlignState
+
 	lastReport *inspect.Report
 	lastProbe  *inspect.ProbeReport
 	probeRect  *core.Rect
@@ -626,6 +644,11 @@ func newDefectPanel(a *App, mode defectMode) *DefectPanel {
 		productOpts:       core.DefaultProductOptions(),
 		productLenScale:   1,
 	}
+	// A real capture is slightly misaligned; the teach program starts with the camera default,
+	// the studio stays aligned because painting needs the nominal position.
+	if mode == modeDetect {
+		p.warp = core.DefaultCaptureWarp()
+	}
 	for i := range p.inspectParams {
 		p.inspectParams[i] = newInspectParams()
 	}
@@ -674,6 +697,7 @@ func (p *DefectPanel) ModelLoaded() {
 	p.probeRect = nil
 	p.golden = nil
 	p.test = nil
+	p.defectAlignState = defectAlignState{}
 	p.strokeSeed = 1
 	p.renderRev++
 	p.sel.set = nil
@@ -831,16 +855,29 @@ func (p *DefectPanel) requestRun() {
 	}
 	inspectNow := p.inspectNow
 	p.inspectNow = false
+	// The taught alignment (nil in the studio) gates the inspection; see the pipeline rule.
+	flow := a.alignFlow()
+	al := flow.Snapshot()
+	required := flow != nil && flow.Required()
+	armed := al.Armed
 	doInspect := !p.manual || inspectNow
 	userImg := p.user.img
-	needRender := p.renderRev != p.renderedRev || p.golden == nil
+	raw := p.raw
+	prevRaw := p.raw
+	prevOut := p.alignOut
+	prevAligned := p.aligned
+	prevTpl := p.tpl
+	// Re-render once when the alignment revision changes so the golden image follows rule 5.
+	needRender := p.renderRev != p.renderedRev || p.golden == nil || p.alignedRev != al.Rev
 	rev := p.renderRev
 	light := a.Light.Clone()
 	ch := p.channel
 	noise := p.noise
 	warp := p.warp
 	params := p.inspectParams[ch]
-	needLearn := doInspect && (!p.learned[ch] || p.relearn)
+	// Whether a learn is due is decided on the UI thread; the job drops it when the alignment
+	// blocks the inspection, but the good sample is fetched for it up front.
+	learnWanted := doInspect && (!p.learned[ch] || p.relearn)
 	k := p.learnK
 	viewKind := p.viewKind
 	gv := p.gvStrokes()
@@ -861,28 +898,75 @@ func (p *DefectPanel) requestRun() {
 	a.Jobs.Run("defect", func() func() {
 		var res snapFetchResult
 		if userImg != nil {
-			test, golden = userImg, nil
+			raw, golden = userImg, nil
 		} else if liveOn {
 			var err error
-			res, err = liveFetch(liveCl, liveRev, have, ch, needLearn, viewKind != "test", scene.W, scene.H)
+			res, err = liveFetch(liveCl, liveRev, have, ch, learnWanted, viewKind != "test", scene.W, scene.H)
 			if err != nil {
 				return func() { p.liveFetchFailed(liveSess, liveRev, err) }
 			}
-			test, golden = res.test, res.golden
+			raw, golden = res.test, res.golden
 		} else if snapOn {
 			var err error
-			res, err = snapFetch(exe, scene, srcDir, snapMeta, have, workDir, ch, needLearn, scene.W, scene.H)
+			res, err = snapFetch(exe, scene, srcDir, snapMeta, have, workDir, ch, learnWanted, scene.W, scene.H)
 			if err != nil {
 				return func() {
 					p.snapSrc.msgKey, p.snapSrc.msgText, p.snapSrc.msgErr = "defect.snap.error", err.Error(), true
 					a.SetHint(T("common.error", "msg", err.Error()))
 				}
 			}
-			test = res.test
+			raw = res.test
 			golden = core.RenderChannel(scene.Light, &light, ch)
-		} else if needRender {
-			golden, test = core.RenderDefectPairWarped(scene.Light, &light, ch, sc, gv, noise, warp)
+		} else if needRender || raw == nil {
+			golden, raw = core.RenderDefectPairWarped(scene.Light, &light, ch, sc, gv, noise, warp)
 		}
+		// Align the raw capture onto the design grid when the flow is armed (rules 2-5).
+		test = raw
+		var out *AlignOutcome
+		var aligned *core.GrayImage
+		tpl := prevTpl
+		var nominal *core.GrayImage
+		if armed && raw != nil {
+			tplDirty := tpl == nil || tpl.scene != scene || tpl.ch != ch ||
+				tpl.scale != al.Scale || !reflect.DeepEqual(tpl.light, light)
+			if tplDirty {
+				nominal = core.RenderChannel(scene.Light, &light, ch)
+				img, _, terr := core.DesignTemplate(scene.Material, nominal, al.Scale)
+				if terr != nil {
+					out = &AlignOutcome{Rev: al.Rev, Err: terr.Error()}
+				} else {
+					tpl = &alignTemplate{scene: scene, ch: ch, light: light, scale: al.Scale, img: img}
+				}
+			}
+			if out == nil {
+				if prevOut != nil && prevOut.Rev == al.Rev && !tplDirty && raw == prevRaw {
+					out = prevOut
+					aligned = prevAligned
+				} else {
+					ca, aerr := core.AlignCapture(tpl.img, raw, al.Rois, al.Scale, al.Config)
+					out = &AlignOutcome{
+						Rev:       al.Rev,
+						Usable:    ca.Usable,
+						Report:    ca.Report,
+						Image:     ca.Image,
+						NoData:    ca.NoData,
+						ElapsedMs: ca.ElapsedMs,
+					}
+					if aerr != nil {
+						out.Err = aerr.Error()
+					}
+					if ca.Usable {
+						aligned = ca.Image
+					}
+				}
+			}
+			if out != nil && out.Usable && aligned != nil {
+				test = aligned
+			}
+		}
+		blocked := required && !(armed && out != nil && out.Usable)
+		doInspect = doInspect && !blocked
+		needLearn := learnWanted && !blocked
 		if needLearn {
 			var good *core.GrayImage
 			if userImg != nil {
@@ -907,10 +991,21 @@ func (p *DefectPanel) requestRun() {
 		var report inspect.Report
 		if doInspect {
 			var err error
-			report, err = inspect.Inspect(inspectImage(test), inspectRegions(scene), params)
+			reg := inspectRegions(scene)
+			if out != nil && aligned != nil && test == aligned {
+				reg.Skip = out.NoData // no data at the border the alignment shift opened: not inspected
+			}
+			report, err = inspect.Inspect(inspectImage(test), reg, params)
 			if err != nil {
 				return func() { a.SetHint(T("common.error", "msg", err.Error())) }
 			}
+		}
+		// The golden image must be on the same grid as the aligned test image (rule 5).
+		if armed && aligned != nil && test == aligned && golden != nil {
+			if nominal == nil {
+				nominal = core.RenderChannel(scene.Light, &light, ch)
+			}
+			golden = nominal
 		}
 		var pix []byte
 		switch {
@@ -937,8 +1032,17 @@ func (p *DefectPanel) requestRun() {
 				PutRGBA(pix)
 				return
 			}
+			p.raw = raw
 			p.golden = golden
 			p.test = test
+			p.alignOut = out
+			p.aligned = aligned
+			p.tpl = tpl
+			p.alignedRev = al.Rev
+			if out != nil && !doInspect && !p.a.Jobs.Busy("defect") {
+				// An alignment ran without an inspection: show its own time.
+				a.SetElapsed(out.ElapsedMs)
+			}
 			if liveOn {
 				if p.snapSrc.frames == nil {
 					p.snapSrc.frames = map[snapKey]*core.GrayImage{}
@@ -1092,8 +1196,9 @@ func (p *DefectPanel) requestProbe(rect core.Rect) {
 	params := p.inspectParams[p.channel]
 	test := p.test
 	report := p.lastReport
+	regions := p.testRegions(scene)
 	a.Jobs.Run("defect-probe", func() func() {
-		pr, err := inspect.ProbeRect(inspectImage(test), inspectRegions(scene), params, *report, inspect.Rect{
+		pr, err := inspect.ProbeRect(inspectImage(test), regions, params, *report, inspect.Rect{
 			X: int(math.Floor(rect.X)),
 			Y: int(math.Floor(rect.Y)),
 			W: int(math.Ceil(rect.W)),
@@ -1431,6 +1536,39 @@ func (p *DefectPanel) handleKeys() {
 	}
 }
 
+// alignReason returns why the last alignment failed or was only usable with warnings (rule 6);
+// a failed alignment blocks detection and is reported through AlignState, not as a hint.
+func (p *DefectPanel) alignReason() string {
+	if p.alignOut == nil {
+		return ""
+	}
+	if p.alignOut.Err != "" {
+		return p.alignOut.Err
+	}
+	if len(p.alignOut.Report.Reasons) > 0 {
+		return p.alignOut.Report.Reasons[0].Message
+	}
+	return ""
+}
+
+// drawAlignStatus shows the alignment state of the panel (one line) in the teach tab.
+func (p *DefectPanel) drawAlignStatus() {
+	if p.a.alignFlow() == nil {
+		return
+	}
+	key := "defect.align." + p.AlignState().key()
+	text := T(key)
+	if r := p.alignReason(); r != "" && (p.AlignState() == alignFailed || p.AlignState() == alignDone) {
+		text = text + " " + T("defect.align.reason", "msg", r)
+	}
+	switch p.AlignState() {
+	case alignOff, alignFailed:
+		Warn(text)
+	default:
+		Note(text)
+	}
+}
+
 func (p *DefectPanel) DrawLeft() {
 	p.handleKeys()
 	if p.mode == modeAuthor {
@@ -1449,6 +1587,7 @@ func (p *DefectPanel) DrawLeft() {
 	}
 
 	if p.mode == modeDetect {
+		p.drawAlignStatus()
 		p.drawManualSection()
 		p.drawLiveSection()
 		if p.drawSnapSection() {

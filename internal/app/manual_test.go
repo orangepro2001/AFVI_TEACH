@@ -127,6 +127,7 @@ func TestReadGrayImage(t *testing.T) {
 
 func TestManualModeDoesNotInspect(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -170,6 +171,7 @@ func TestManualModeDoesNotInspect(t *testing.T) {
 
 func TestLoadImageReplacesSources(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -228,6 +230,7 @@ func TestLoadImageReplacesSources(t *testing.T) {
 
 func TestLoadImageRejectsWrongSize(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")
@@ -247,6 +250,7 @@ func TestLoadImageRejectsWrongSize(t *testing.T) {
 
 func TestSaveWithLoadedImageWritesOnlyParams(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	if dp == nil {
 		t.Fatal("no defect panel")

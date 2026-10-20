@@ -10,6 +10,7 @@ import (
 	"github.com/AllenDang/cimgui-go/backend/glfwbackend"
 	"github.com/AllenDang/cimgui-go/imgui"
 
+	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/config"
 	"afvi/teach-imgui/internal/core"
 )
@@ -48,14 +49,22 @@ type panelCtor struct {
 	order    int
 	make     func(*App) Panel
 	profiles []Profile
+	roles    []access.Role
 }
 
 var panelCtors []panelCtor
 
 // registerPanel is called from each panel file's init(); order sets the tab position.
-// profiles restricts the panel to those profiles; an empty list allows every profile.
+// It registers an ADMIN-only page. profiles restricts the panel to those profiles; an
+// empty list allows every profile.
 func registerPanel(order int, make func(*App) Panel, profiles ...Profile) {
-	panelCtors = append(panelCtors, panelCtor{order: order, make: make, profiles: profiles})
+	registerPanelFor([]access.Role{access.RoleAdmin}, order, make, profiles...)
+}
+
+// registerPanelFor registers a page visible to the listed roles only. An empty role list
+// means no role at all (the page is never shown).
+func registerPanelFor(roles []access.Role, order int, make func(*App) Panel, profiles ...Profile) {
+	panelCtors = append(panelCtors, panelCtor{order: order, make: make, profiles: profiles, roles: roles})
 }
 
 // allows reports whether the panel is part of profile p.
@@ -65,6 +74,16 @@ func (c panelCtor) allows(p Profile) bool {
 	}
 	for _, prof := range c.profiles {
 		if prof == p {
+			return true
+		}
+	}
+	return false
+}
+
+// visibleTo reports whether the page is reachable with role r.
+func (c panelCtor) visibleTo(r access.Role) bool {
+	for _, role := range c.roles {
+		if role == r {
 			return true
 		}
 	}
@@ -105,8 +124,17 @@ type App struct {
 	Viewer *Viewer
 	Jobs   *Jobs
 
-	panels []Panel
-	tab    int
+	panels    []Panel     // the pages visible to the current role, in tab order
+	allPanels []Panel     // every page constructed for the profile, any role, in tab order
+	allCtors  []panelCtor // the registration of each page in allPanels, same order
+	tab       int
+	role      access.Role
+
+	loginOpen   bool   // the login dialog is (or is about to be) open
+	loginUser   string // user field of the login dialog
+	loginPass   string // password field of the login dialog
+	loginErr    string // i18n key of the last login error ("" = none)
+	loginLocked bool   // the studio before its login: no page is visible and the dialog cannot be cancelled
 
 	theme, appliedTheme string
 
@@ -127,6 +155,8 @@ type App struct {
 	aboutOpen bool
 
 	live *liveLink // the live link to the other program (nil = off)
+
+	align *AlignFlow // taught alignment of the loaded model (teach program only, nil in the studio)
 }
 
 // NewApp builds the app state and panels; the window/backend is attached by main. The
@@ -145,13 +175,20 @@ func NewApp(cfg *config.Config, cfgPath string, theme string, profile Profile) *
 		timings:  map[string][]float64{},
 	}
 	a.Jobs = NewJobs(func(err error) { a.SetHint(T("common.error", "msg", err.Error())) })
+	if profile == ProfileTeach {
+		a.align = newAlignFlow(a)
+	}
 	sort.SliceStable(panelCtors, func(i, j int) bool { return panelCtors[i].order < panelCtors[j].order })
 	for _, c := range panelCtors {
 		if !c.allows(profile) {
 			continue
 		}
-		a.panels = append(a.panels, c.make(a))
+		a.allPanels = append(a.allPanels, c.make(a))
+		a.allCtors = append(a.allCtors, c)
 	}
+	// Tests and the self-test expect the full interface; runProfile decides the start role.
+	a.role = access.RoleAdmin
+	a.rebuildPanels()
 	a.machineIdx = cfg.ActiveIndex()
 	m := a.CurrentMachine()
 	a.RefRoot = m.Name
@@ -174,8 +211,12 @@ func (a *App) CurrentMachine() config.Machine {
 }
 
 // SelectMachine switches to machine i: it rescans models, clears the scene and viewer
-// and auto-loads the first model. It is ignored while a model is loading.
+// and auto-loads the first model. It is ignored while a model is loading or for any role
+// other than the admin.
 func (a *App) SelectMachine(i int) {
+	if a.role != access.RoleAdmin {
+		return
+	}
 	if a.Cfg == nil || i < 0 || i >= len(a.Cfg.Machines) || a.loading {
 		return
 	}
@@ -204,9 +245,128 @@ func (a *App) SelectMachine(i int) {
 // RescanModels re-scans the active machine (used after the configuration changed).
 func (a *App) RescanModels() { a.SelectMachine(a.machineIdx) }
 
+// Role returns the access level of the current user.
+func (a *App) Role() access.Role { return a.role }
+
+// rebuildPanels filters allPanels down to the pages visible to the current role.
+func (a *App) rebuildPanels() {
+	a.panels = make([]Panel, 0, len(a.allPanels))
+	for i, p := range a.allPanels {
+		if a.allCtors[i].visibleTo(a.role) {
+			a.panels = append(a.panels, p)
+		}
+	}
+}
+
+// SetRole switches the access level: the active page is deactivated, the visible pages
+// are rebuilt, the tab returns to the first page and admin-only dialogs are closed when
+// the admin leaves.
+func (a *App) SetRole(r access.Role) {
+	if p := a.ActivePanel(); p != nil {
+		p.Deactivate()
+	}
+	a.role = r
+	a.rebuildPanels()
+	a.tab = 0
+	a.hint = ""
+	if r != access.RoleAdmin {
+		a.cfgDlg.needOpen = false
+		a.cfgDlg.draft = nil
+		a.cfgDlg.errMsg = ""
+	}
+	if r != access.RoleNone {
+		a.loginLocked = false
+	}
+	if a.Scene != nil && len(a.panels) > 0 {
+		a.panels[0].Activate()
+	}
+}
+
+// Lock drops to no role at all: no page is visible and the login dialog cannot be
+// cancelled (the studio before its login).
+func (a *App) Lock() {
+	a.SetRole(access.RoleNone)
+	a.loginLocked = true
+	a.loginOpen = true
+}
+
+// OpenLogin shows the login dialog.
+func (a *App) OpenLogin() {
+	a.loginOpen = true
+	a.loginErr = ""
+}
+
+// TryLogin checks a login with internal/access. The studio accepts only an admin login.
+// On success the role changes and the dialog closes; on failure the role is kept and
+// loginErr is set to the "login.failed" key.
+func (a *App) TryLogin(user, password string) bool {
+	role, ok := access.Authenticate(user, password)
+	if ok && a.profile == ProfileStudio && role != access.RoleAdmin {
+		ok = false
+	}
+	if !ok {
+		a.loginErr = "login.failed"
+		a.loginPass = ""
+		return false
+	}
+	a.SetRole(role)
+	a.loginOpen = false
+	a.loginLocked = false
+	a.loginErr = ""
+	a.loginUser = ""
+	a.loginPass = ""
+	return true
+}
+
+// Logout leaves the admin: the teaching program goes back to the operator pages, the
+// studio locks itself again.
+func (a *App) Logout() {
+	if a.profile == ProfileStudio {
+		a.Lock()
+		return
+	}
+	a.SetRole(access.RoleOperator)
+}
+
+// panelByID returns the panel with the given id among all constructed pages (any role),
+// or nil.
+func (a *App) panelByID(id string) Panel {
+	for _, p := range a.allPanels {
+		if p.ID() == id {
+			return p
+		}
+	}
+	return nil
+}
+
+// PageVisible reports whether the page with that id is visible to the current role.
+func (a *App) PageVisible(id string) bool {
+	for _, p := range a.panels {
+		if p.ID() == id {
+			return true
+		}
+	}
+	return false
+}
+
+// ShowPage switches to the visible page with that id. It returns false and changes
+// nothing when the page is not visible to the current role.
+func (a *App) ShowPage(id string) bool {
+	for i, p := range a.panels {
+		if p.ID() == id {
+			a.switchTab(i)
+			return a.ActivePanel() != nil && a.ActivePanel().ID() == id
+		}
+	}
+	return false
+}
+
 // ApplyConfig validates c, saves it to CfgPath, installs it and switches to its active
 // machine.
 func (a *App) ApplyConfig(c *config.Config) error {
+	if a.role != access.RoleAdmin {
+		return nil
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -240,7 +400,7 @@ func (a *App) CameraChannel() core.CameraChannel {
 
 // NotifyLightChanged tells every panel the shared light setting or display changed.
 func (a *App) NotifyLightChanged() {
-	for _, p := range a.panels {
+	for _, p := range a.allPanels {
 		p.LightChanged()
 	}
 }
@@ -293,7 +453,8 @@ func (a *App) LoadModel(i int) {
 			}
 			a.Scene = scene
 			a.Viewer.Clear()
-			for _, p := range a.panels {
+			a.align.modelLoaded(scene)
+			for _, p := range a.allPanels {
 				p.ModelLoaded()
 			}
 			if p := a.ActivePanel(); p != nil {
@@ -326,7 +487,7 @@ func (a *App) Frame() {
 		a.appliedTheme = a.theme
 	}
 	a.drawMenuBar()
-	if imgui.IsKeyPressedBoolV(imgui.KeyF11, false) {
+	if a.role == access.RoleAdmin && imgui.IsKeyPressedBoolV(imgui.KeyF11, false) { // same as the View menu item: admin only
 		a.toggleFocus()
 	}
 
@@ -434,6 +595,7 @@ func (a *App) Frame() {
 	}
 	a.drawConfigDialog()
 	a.drawAbout()
+	a.drawLogin()
 }
 
 // drawMenuBar draws the Win32 main menu bar (File / View / Help).
@@ -443,37 +605,52 @@ func (a *App) drawMenuBar() {
 	}
 	if imgui.BeginMenu(T("menu.file")) {
 		HotText(T("menu.file"), "")
-		if imgui.MenuItemBoolV(T("menu.machineConfig"), "", false, true) {
-			a.OpenConfigDialog()
+		if a.role == access.RoleAdmin {
+			if imgui.MenuItemBoolV(T("menu.machineConfig"), "", false, true) {
+				a.OpenConfigDialog()
+			}
+			HotText(T("menu.machineConfig"), "")
+			if imgui.MenuItemBoolV(T("menu.rescan"), "", false, true) {
+				a.RescanModels()
+			}
+			HotText(T("menu.rescan"), "")
+			imgui.Separator()
+			if imgui.MenuItemBoolV(T("menu.logout"), "", false, true) {
+				a.Logout()
+			}
+			HotText(T("menu.logout"), "")
+			imgui.Separator()
+		} else if a.role == access.RoleOperator {
+			if imgui.MenuItemBoolV(T("menu.login"), "", false, true) {
+				a.OpenLogin()
+			}
+			HotText(T("menu.login"), "")
+			imgui.Separator()
 		}
-		HotText(T("menu.machineConfig"), "")
-		if imgui.MenuItemBoolV(T("menu.rescan"), "", false, true) {
-			a.RescanModels()
-		}
-		HotText(T("menu.rescan"), "")
-		imgui.Separator()
 		if imgui.MenuItemBoolV(T("menu.exit"), "Alt+F4", false, true) {
 			a.be.SetShouldClose(true)
 		}
 		HotText(T("menu.exit"), "Alt+F4")
 		imgui.EndMenu()
 	}
-	if imgui.BeginMenu(T("menu.view")) {
+	if a.role != access.RoleNone && imgui.BeginMenu(T("menu.view")) {
 		HotText(T("menu.view"), "")
-		if imgui.MenuItemBoolV(T("menu.focus"), "F11", a.focusView, true) {
-			a.toggleFocus()
-		}
-		HotText(T("menu.focus"), "F11")
-		imgui.Separator()
-		if imgui.BeginMenu(T("menu.theme")) {
-			HotText(T("menu.theme"), "")
-			for _, name := range []string{ThemeLight, ThemeDark} {
-				if imgui.MenuItemBoolV(T("theme."+name), "", a.theme == name, true) {
-					a.theme = name
-				}
-				HotText(T("theme."+name), "")
+		if a.role == access.RoleAdmin {
+			if imgui.MenuItemBoolV(T("menu.focus"), "F11", a.focusView, true) {
+				a.toggleFocus()
 			}
-			imgui.EndMenu()
+			HotText(T("menu.focus"), "F11")
+			imgui.Separator()
+			if imgui.BeginMenu(T("menu.theme")) {
+				HotText(T("menu.theme"), "")
+				for _, name := range []string{ThemeLight, ThemeDark} {
+					if imgui.MenuItemBoolV(T("theme."+name), "", a.theme == name, true) {
+						a.theme = name
+					}
+					HotText(T("theme."+name), "")
+				}
+				imgui.EndMenu()
+			}
 		}
 		if imgui.BeginMenu(T("menu.lang")) {
 			HotText(T("menu.lang"), "")
@@ -569,6 +746,9 @@ func (a *App) drawCenterMessage() {
 	if a.loadErr != "" {
 		msg = T(a.errKey, "msg", a.loadErr)
 	}
+	if a.role == access.RoleNone {
+		msg = T("login.locked")
+	}
 	pos := imgui.CursorScreenPos()
 	avail := imgui.ContentRegionAvail()
 	dl := imgui.WindowDrawList()
@@ -587,40 +767,42 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 	imgui.BeginV("##toolbar", nil, fixedWindowFlags()|imgui.WindowFlagsNoScrollbar)
 	imgui.PopStyleVar()
 
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("top.machine"))
-	imgui.SameLine()
-	imgui.SetNextItemWidth(sc(190))
-	machinePreview := ""
-	if a.Cfg != nil && a.machineIdx >= 0 && a.machineIdx < len(a.Cfg.Machines) {
-		m := a.Cfg.Machines[a.machineIdx]
-		machinePreview = m.Name
-		if m.Address != "" {
-			machinePreview = m.Name + "  (" + m.Address + ")"
-		}
-	}
-	if imgui.BeginCombo("##machine", machinePreview) {
-		if a.Cfg != nil {
-			for i, m := range a.Cfg.Machines {
-				label := m.Name
-				if m.Address != "" {
-					label = m.Name + "  (" + m.Address + ")"
-				}
-				if imgui.SelectableBoolV(label+"##mc"+fmt.Sprint(i), i == a.machineIdx, 0, imgui.NewVec2(0, 0)) && i != a.machineIdx {
-					a.SelectMachine(i)
-				}
-				HotText(label, "")
+	if a.role == access.RoleAdmin {
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(T("top.machine"))
+		imgui.SameLine()
+		imgui.SetNextItemWidth(sc(190))
+		machinePreview := ""
+		if a.Cfg != nil && a.machineIdx >= 0 && a.machineIdx < len(a.Cfg.Machines) {
+			m := a.Cfg.Machines[a.machineIdx]
+			machinePreview = m.Name
+			if m.Address != "" {
+				machinePreview = m.Name + "  (" + m.Address + ")"
 			}
 		}
-		imgui.EndCombo()
+		if imgui.BeginCombo("##machine", machinePreview) {
+			if a.Cfg != nil {
+				for i, m := range a.Cfg.Machines {
+					label := m.Name
+					if m.Address != "" {
+						label = m.Name + "  (" + m.Address + ")"
+					}
+					if imgui.SelectableBoolV(label+"##mc"+fmt.Sprint(i), i == a.machineIdx, 0, imgui.NewVec2(0, 0)) && i != a.machineIdx {
+						a.SelectMachine(i)
+					}
+					HotText(label, "")
+				}
+			}
+			imgui.EndCombo()
+		}
+		ItemEdge(EdgeSunken)
+		imgui.SameLine()
+		if ButtonSized("…", "cfg-open", imgui.NewVec2(sc(26), imgui.FrameHeight()), true) {
+			a.OpenConfigDialog()
+		}
+		ToolbarSeparator()
+		imgui.SameLine()
 	}
-	ItemEdge(EdgeSunken)
-	imgui.SameLine()
-	if ButtonSized("…", "cfg-open", imgui.NewVec2(sc(26), imgui.FrameHeight()), true) {
-		a.OpenConfigDialog()
-	}
-	ToolbarSeparator()
-	imgui.SameLine()
 
 	imgui.AlignTextToFramePadding()
 	imgui.TextUnformatted(T("top.model"))
@@ -653,6 +835,29 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 		status = T("status.loaded", "w", a.Scene.W, "h", a.Scene.H, "ms", F(a.Scene.LoadMs, 0))
 	}
 	imgui.TextUnformatted(status)
+
+	// Right end: who is logged in plus the login / logout button.
+	roleLabel := T("login.user.operator")
+	roleID, roleText := "login-open", T("login.open")
+	if a.role == access.RoleAdmin {
+		roleLabel, roleID, roleText = T("login.user.admin"), "login-logout", T("login.logout")
+	}
+	roleW := ButtonWidth(roleText)
+	avail := imgui.ContentRegionAvail().X
+	if avail > roleW+imgui.CalcTextSize(roleLabel).X+sc(16) {
+		imgui.SameLine()
+		imgui.SetCursorPosX(imgui.CursorPosX() + avail - roleW - imgui.CalcTextSize(roleLabel).X - imgui.CurrentStyle().ItemSpacing().X)
+		imgui.AlignTextToFramePadding()
+		imgui.TextUnformatted(roleLabel)
+		imgui.SameLine()
+		if ButtonSized(roleText, roleID, imgui.NewVec2(roleW, imgui.FrameHeight()), true) {
+			if a.role == access.RoleAdmin {
+				a.Logout()
+			} else {
+				a.OpenLogin()
+			}
+		}
+	}
 
 	dl := imgui.WindowDrawList()
 	wp, ws := imgui.WindowPos(), imgui.WindowSize()

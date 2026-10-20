@@ -6,7 +6,7 @@
 
 同一个模块构建两个 GUI 程序与一个命令行相机程序，均使用 Go + Dear ImGui（cimgui-go），GLFW + OpenGL3 后端：
 
-- **teach-imgui.exe**（教学程序）：对齐页与缺陷检出页。
+- **teach-imgui.exe**（教学程序）：操作员的「对位」与「检测」页；管理员登录后还有对位试验台与缺陷检出页（角色见 [ROLES.md](ROLES.md)）。
 - **camera-gui.exe**（相机合成工作室）：光照与 GV 页、缺陷合成页，camera.exe 的 GUI 前端。
 - **camera.exe**（命令行）：相机模拟程序，两个 GUI 都以子进程方式调用它。
 
@@ -64,7 +64,7 @@ Windows 原生构建：
 
 ### 安装包（setup.exe）
 
-整个项目（教学程序、相机工作室、camera.exe、七份文档、机台配置示例）打成一个自解压安装程序 `dist/AFVI-Teach-Setup-<版本>.exe`。上一节的一键构建（`build-wsl.sh` / `build.ps1`）最后一步就会生成它；下面的脚本用于只想重新打包的时候：
+整个项目（教学程序、相机工作室、camera.exe、八份文档、机台配置示例）打成一个自解压安装程序 `dist/AFVI-Teach-Setup-<版本>.exe`。上一节的一键构建（`build-wsl.sh` / `build.ps1`）最后一步就会生成它；下面的脚本用于只想重新打包的时候：
 
 ```bash
 ./scripts/package-wsl.sh                          # 先跑 build-wsl.sh --no-installer，再打包
@@ -78,7 +78,7 @@ Windows 原生构建：
 ```
 
 - 版本号默认取 `git describe --tags --always --dirty`。
-- 载入的文档写在 `cmd/mkinstaller/main.go` 的固定清单里（README、USAGE、MANUAL、REFERENCE_SETUP、LINK、INSPECT_RULES、SCENARIO）；USAGE.md 新链接到别的文档时，要把它加进这份清单，否则安装后的链接是断的。
+- 载入的文档写在 `cmd/mkinstaller/main.go` 的固定清单里（README、USAGE、MANUAL、ROLES、REFERENCE_SETUP、LINK、INSPECT_RULES、SCENARIO）；USAGE.md 新链接到别的文档时，要把它加进这份清单，否则安装后的链接是断的。
 - 机台数据（`reference/`）带有机台相关、可能保密的内容，**只有显式加 `--reference` / `-Reference` 才会打进安装包**。不打包时，安装完成页会提示首次使用要放置机台数据（见 [REFERENCE_SETUP.md](REFERENCE_SETUP.md)）。
 - 安装程序本身是纯 Go（`cmd/setup`，`CGO_ENABLED=0`，无需 NSIS / Inno Setup）：`cmd/mkinstaller` 把 zip 载荷（`manifest.json` 加全部文件）接在 `setup` 外壳的后面，`uninstall.exe` 就是去掉载荷的外壳。载荷里的 exe 若引用 `lib*.dll`（MinGW 运行库），`mkinstaller` 会拒绝打包。
 - 安装程序带 `asInvoker` 清单（文件名叫 setup 时 Windows 否则会弹出提升权限的提示），并开启通用控件 v6 与 DPI 感知；图标与清单由 `windres` 编译 `cmd/setup/setup.rc` 得到 `cmd/setup/rsrc_windows_amd64.syso`（已被 git 忽略）。**没有 windres 脚本会直接报错。**
@@ -130,6 +130,8 @@ CGO_ENABLED=0 go build -o bin/camera ./cmd/camera
 bin/camera -ref reference -list
 ```
 
+默认场景带轻微错位：`core.DefaultCaptureWarp()` = 平移 (14, -10) 像素、旋转 0.3°，`camera.exe` 与教学程序的内置仿真都用它（模拟真实上料）。`camera.exe -aligned` 让内置默认场景原地渲染、不套这个错位，此时输出的描述与旧版默认逐字节相同；它只作用于内置默认场景，和 `-in` 一起给出时被忽略。显式给出的 `-dx -dy -rot …` 仍逐项覆盖当前配方。相机合成工作室自己的默认错位保持为「无」，它的「错位与翘起」预设里有「典型错位（相机默认）」。详见 [ROLES.md](ROLES.md)。
+
 ## 运行（在 Windows 环境中）
 
 将生成的 `.exe` 文件传输到 Windows 环境，然后：
@@ -158,6 +160,8 @@ bin/camera -ref reference -list
 .\bin\camera-gui.exe -selftest -out selftest-output
 ```
 
+自测会用内置的 `admin` / `1` 自己登录，所以它看到的仍是管理员页面（不需要、也不要再传 `-login`）；正常启动时教学程序默认以操作员身份运行，工作室锁定在登录窗口，见 [ROLES.md](ROLES.md)。
+
 机台配置保存在 `afvi.toml`（示例见 `configs/afvi.example.toml`）：查找顺序为 `-config <文件>` → 环境变量 `AFVI_CONFIG` → exe 同级的 `afvi.toml` → 工作目录的 `afvi.toml`。没有配置文件时，应用按 `-ref` / `AFVI_REFERENCE_DIR` / `reference/` 查找顺序模拟一台 `REFERENCE` 机台。
 
 ## 操作说明
@@ -167,13 +171,13 @@ bin/camera -ref reference -list
 - **Shift + 鼠标左键点击**：放大（×1.5，以光标为中心）；**Shift + 鼠标右键点击**：缩小（÷1.5，以光标为中心）
 - **中键/右键拖动**：平移画布
 - **双击**：适应窗口（画框工具绘制过程中不会触发）
-- **菜单栏**：文件（机台配置…、重新扫描型号、退出）、视图（主题、语言、适应窗口）、帮助（关于…）
-- **工具栏**：机台下拉框 + `…` 按钮、型号下拉框、加载状态
-- **页签**：切换光照 / 对齐 / 缺陷页
+- **菜单栏**：文件（管理员登录… / 注销、机台配置…、重新扫描型号、退出）、视图（主题、语言、适应窗口）、帮助（关于…）
+- **工具栏**：机台下拉框 + `…` 按钮（管理员）、型号下拉框、加载状态、右端的用户名与登录 / 注销按钮
+- **页签**：操作员为对位 / 检测，管理员为对位 / 对位试验台 / 缺陷检出；工作室为光照 / 缺陷合成
 
 ### 页面功能
 - **光照页**：左侧滑块调节亮度，左键拖框测量 GV
-- **对齐页**：左键新建 ROI/遮挡，选择移动，Delete 删除
+- **对位页 / 对位试验台**：对位页在设计假想图上画 ROI，按「确定对位」后才允许检测；对位试验台（管理员）左键新建 ROI/遮挡，选择移动，Delete 删除
 - **缺陷页**：画点/线/块/异物/污染，探查缺陷；画框工具（矩形 / 椭圆 / 钢笔，右键闭合多边形，Esc 取消，Backspace 撤销顶点）；不良颜色（按颜色模拟，R/G/B 滑块与七个预设）；虚拟良品（纹理强度 / 种子 / 相关长度倍率，换一块板、恢复默认）与默认不良（约 10 个 SR 内的小亮点，可重新生成 / 移除 / 隐藏轮廓）；选择工具（悬浮面板的点选 / 矩形框 / 椭圆框 / 多边形框）与浮动"选中的不良"窗口批量调参；检出参数按 F1 唤出/关闭浮动窗口，窗口内按相机通道各有一套参数，逐材质（metal / sr / open / base）设置可接受亮度区间 [Low, High]、连续像素数 Size 与最小面积 MinArea，区间由良品样本学习得到，并有全局的边缘忽略（0–64 像素，默认 6）
 
 ## 技术特性

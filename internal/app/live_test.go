@@ -21,6 +21,7 @@ func startLinkedApps(t *testing.T) (studio, teach *App, sdp, tdp *DefectPanel) {
 	t.Helper()
 	studio = newTestApp(t, ProfileStudio)
 	teach = newTestApp(t, ProfileTeach)
+	legacyDetect(teach)
 	studio.StartLive("127.0.0.1:0")
 	if studio.live == nil || studio.live.srv == nil {
 		t.Fatalf("studio link did not start: %+v", studio.live)
@@ -197,6 +198,7 @@ func TestLiveLinkStudioToTeach(t *testing.T) {
 	}
 
 	off := newTestApp(t, ProfileTeach)
+	legacyDetect(off)
 	odp := defectPanelOf(off)
 	odp.requestSnapLoad(dir)
 	pollJobs(t, off)
@@ -297,6 +299,7 @@ func TestLiveClientRedials(t *testing.T) {
 	ln.Close()
 
 	teach := newTestApp(t, ProfileTeach)
+	legacyDetect(teach)
 	tdp := defectPanelOf(teach)
 	teach.StartLive(addr)
 	defer teach.closeLive()
@@ -433,6 +436,7 @@ func TestSnapPathFollowsModelUntilEdited(t *testing.T) {
 
 func TestParamsFileRoundTripThroughPanel(t *testing.T) {
 	a := newTestApp(t, ProfileTeach)
+	legacyDetect(a)
 	dp := defectPanelOf(a)
 	dp.requestRun()
 	pollJobs(t, a)
