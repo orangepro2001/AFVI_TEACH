@@ -9,16 +9,16 @@ import (
 	"afvi/teach-imgui/internal/golden"
 )
 
-// userMaskUI is the state of the UserMask section on the defect page.
+// userMaskUI is the state of the UserMask section on the defect page. The target of a region
+// is the sub-tab selection (DefectPanel.focus.target).
 type userMaskUI struct {
-	active bool          // a drawing tool is selected: the frame tool owns left drags on the picture
-	target golden.Target // the area the next region applies to
+	active bool // a drawing tool is selected: the frame tool owns left drags on the picture
 	frame  *FrameTool
 }
 
-// newUserMaskUI returns the default state: no tool, Metal target, a rectangle frame tool.
+// newUserMaskUI returns the default state: no tool, a rectangle frame tool.
 func newUserMaskUI() userMaskUI {
-	return userMaskUI{target: golden.TargetMetal, frame: NewFrameTool()}
+	return userMaskUI{frame: NewFrameTool()}
 }
 
 // userBoard returns the golden board of the app in detect mode, nil otherwise.
@@ -75,7 +75,7 @@ func (p *DefectPanel) userMaskPointer(ev PointerEvent) bool {
 		if len(b.UserMask().Regions) >= golden.MaxRegions {
 			p.a.SetHint(T("defect.usermask.full", "n", strconv.Itoa(golden.MaxRegions)))
 		} else {
-			b.AddUserRegion(p.um.target, goldenShapeFromFrame(done))
+			b.AddUserRegion(p.focus.target, goldenShapeFromFrame(done))
 		}
 	}
 	if p.a != nil && p.a.Viewer != nil {
@@ -131,32 +131,10 @@ func (p *DefectPanel) drawUserMaskSection() {
 		Note(T("defect.usermask.wait"))
 	}
 	if drawable {
-		// Target tool buttons: pressing the active one turns the tool off.
-		for i, t := range []golden.Target{golden.TargetMetal, golden.TargetSR} {
-			name := userMaskTargetName(t)
-			if i > 0 {
-				WrapSameLine(name)
-			}
-			id := "defect-um-metal"
-			if t == golden.TargetSR {
-				id = "defect-um-sr"
-			}
-			active := p.um.active && p.um.target == t
-			if ToolButton(name, id, active) {
-				if active {
-					p.userMaskStop()
-				} else {
-					p.um.target = t
-					if p.um.frame != nil {
-						p.um.frame.Reset()
-					}
-					p.um.active = true
-				}
-				p.a.SetHint(T("defect.usermask.hint", "name", name))
-			}
-		}
+		// The target follows the second-level sub-tab strip.
+		Note(T("defect.usermask.target", "name", userMaskTargetName(p.focus.target)))
 
-		// Shape buttons.
+		// Shape buttons switch the drawing tool on and off.
 		shapes := []struct {
 			id    string
 			label string
@@ -170,11 +148,15 @@ func (p *DefectPanel) drawUserMaskSection() {
 			if i > 0 {
 				WrapSameLine(s.label)
 			}
-			active := p.um.frame != nil && p.um.frame.Kind == s.kind
+			active := p.um.active && p.um.frame != nil && p.um.frame.Kind == s.kind
 			if ToolButton(s.label, s.id, active) {
-				if p.um.frame.Kind != s.kind {
+				if active {
+					p.userMaskStop()
+				} else {
 					p.um.frame.Kind = s.kind
 					p.um.frame.Reset()
+					p.um.active = true
+					p.a.SetHint(T("defect.usermask.hint", "name", userMaskTargetName(p.focus.target)))
 				}
 			}
 		}
@@ -332,13 +314,17 @@ func (p *DefectPanel) userMaskOverlay(o *Overlay) {
 			if !o.Visible(x0, y0, w, h) {
 				continue
 			}
+			th := float32(1.5)
+			if r.Target == p.focus.target {
+				th = 3
+			}
 			switch s.Kind {
 			case golden.ShapeRect:
-				o.Rect(x0, y0, w, h, col, 2)
+				o.Rect(x0, y0, w, h, col, th)
 			case golden.ShapeEllipse:
-				drawEllipseOutline(o, s.P0.X, s.P0.Y, s.P1.X, s.P1.Y, col, 2)
+				drawEllipseOutline(o, s.P0.X, s.P0.Y, s.P1.X, s.P1.Y, col, th)
 			case golden.ShapePolygon:
-				userMaskPolygonOutline(o, s.Points, col, 2)
+				userMaskPolygonOutline(o, s.Points, col, th)
 			}
 			userMaskLabel(o, x0, y0, w, h, col, r.Target, i)
 		}

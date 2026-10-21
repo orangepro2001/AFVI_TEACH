@@ -89,7 +89,7 @@ func (s *Selftest) userMaskSteps() []selftestStep {
 			enter: func(a *App) {
 				// Select the tool exactly as a click on the Metal / rectangle buttons would.
 				dp().um.active = true
-				dp().um.target = golden.TargetMetal
+				dp().focus.target = golden.TargetMetal
 				dp().um.frame.Kind = FrameRect
 				dp().um.frame.Reset()
 			},
@@ -139,7 +139,7 @@ func (s *Selftest) userMaskSteps() []selftestStep {
 				px, py := dp().findSrPoint()
 				x, y := float64(px), float64(py)
 				dp().um.active = true
-				dp().um.target = golden.TargetSR
+				dp().focus.target = golden.TargetSR
 				dp().um.frame.Reset()
 				a.golden.AddUserRegion(golden.TargetSR, golden.Shape{
 					Kind: golden.ShapeRect,

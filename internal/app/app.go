@@ -513,9 +513,44 @@ func (a *App) Frame() {
 	pageTop := tabsTop + 2 + tabH
 	pageBottom := pos.Y + size.Y - statusH - 2
 
+	// the page tabs only need tabsTop and tabH: the active panel below decides the rectangles
+	place(pos.X, tabsTop, size.X, tabH+8)
+	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
+	imgui.BeginV("##tabs", nil, fixedWindowFlags()|imgui.WindowFlagsNoBackground|imgui.WindowFlagsNoScrollbar)
+	imgui.PopStyleVar()
+	imgui.SetCursorPos(imgui.NewVec2(10, 2))
+	titles := make([]string, len(a.panels))
+	for i, p := range a.panels {
+		titles[i] = p.Title()
+	}
+	if idx := TabStrip("tabs", titles, a.tab); idx >= 0 {
+		a.switchTab(idx)
+	}
+	imgui.End()
+
+	panel := a.ActivePanel()
+	ready := a.Scene != nil && panel != nil
+
+	// second-level strip: the page reserves a band under the tabs when it provides entries
+	var st SubTabPanel
+	var subItems []SubTabItem
+	subActive := 0
+	subNote := ""
+	if ready {
+		if s, ok := panel.(SubTabPanel); ok {
+			if items, active := s.SubTabs(); len(items) > 0 {
+				st, subItems, subActive, subNote = s, items, active, s.SubTabNote()
+			}
+		}
+	}
+	subH := float32(0)
+	if st != nil {
+		subH = imgui.FrameHeight() + sc(10)
+	}
+
 	pageMin := imgui.NewVec2(pos.X+4, pageTop)
 	pageMax := imgui.NewVec2(pos.X+size.X-4, pageBottom)
-	innerMin := imgui.NewVec2(pageMin.X+4, pageMin.Y+4)
+	innerMin := imgui.NewVec2(pageMin.X+4, pageMin.Y+4+subH)
 	innerMax := imgui.NewVec2(pageMax.X-4, pageMax.Y-4)
 	innerH := innerMax.Y - innerMin.Y
 
@@ -545,22 +580,17 @@ func (a *App) Frame() {
 
 	a.drawToolbar(pos.X, toolbarY, size.X, toolH)
 
-	place(pos.X, tabsTop, size.X, tabH+8)
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
-	imgui.BeginV("##tabs", nil, fixedWindowFlags()|imgui.WindowFlagsNoBackground|imgui.WindowFlagsNoScrollbar)
-	imgui.PopStyleVar()
-	imgui.SetCursorPos(imgui.NewVec2(10, 2))
-	titles := make([]string, len(a.panels))
-	for i, p := range a.panels {
-		titles[i] = p.Title()
+	if st != nil {
+		place(pageMin.X+8, pageMin.Y+4, pageMax.X-pageMin.X-16, subH)
+		imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
+		imgui.BeginV("##subtabs", nil, fixedWindowFlags()|imgui.WindowFlagsNoBackground|imgui.WindowFlagsNoScrollbar)
+		imgui.PopStyleVar()
+		imgui.SetCursorPos(imgui.NewVec2(sc(4), (subH-(imgui.FrameHeight()+2))/2))
+		if idx := SubTabStrip("subtabs", subItems, subActive, subNote); idx >= 0 {
+			st.SelectSubTab(idx)
+		}
+		imgui.End()
 	}
-	if idx := TabStrip("tabs", titles, a.tab); idx >= 0 {
-		a.switchTab(idx)
-	}
-	imgui.End()
-
-	panel := a.ActivePanel()
-	ready := a.Scene != nil && panel != nil
 
 	if leftW > 0 {
 		place(leftMin.X, leftMin.Y, leftW, innerH)

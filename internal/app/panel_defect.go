@@ -603,6 +603,10 @@ type DefectPanel struct {
 	dragCur   core.Point
 
 	um userMaskUI // the UserMask section (detect mode): regions that are not inspected
+
+	focus      defectFocus // the Metal / SR sub-tab and the polarity filter (detect mode)
+	tintShown  tintKey     // what the last applied picture was tinted with
+	focusCache focusCache  // cached p.focus.indices(p.lastReport)
 }
 
 func newDefectPanel(a *App, mode defectMode) *DefectPanel {
@@ -888,9 +892,13 @@ func (p *DefectPanel) requestRun() {
 	goldenBlocked := false
 	var tplClasses []uint8 // the alignment template is painted from the golden board once it is built
 	tplGoldenRev := 0
+	var derivedOrNil *goldenDerived
+	tintRev := 0
 	if g := a.goldenBoard(); g != nil {
 		goldenBlocked = !g.Ready() || g.Empty()
 		if !goldenBlocked {
+			derivedOrNil = g.Derived()
+			tintRev = g.Rev()
 			tplClasses, tplGoldenRev = g.Derived().classes, g.AlignRev()
 			if p.goldenRev != g.LearnRev() {
 				p.goldenRev = g.LearnRev()
@@ -898,6 +906,8 @@ func (p *DefectPanel) requestRun() {
 			}
 		}
 	}
+	focusTarget := p.focus.target
+	tint := newTintSpec(derivedOrNil, focusTarget)
 	// Whether a learn is due is decided on the UI thread; the job drops it when the alignment
 	// blocks the inspection, but the good sample is fetched for it up front.
 	learnWanted := doInspect && (!p.learned[ch] || p.relearn)
@@ -1054,13 +1064,19 @@ func (p *DefectPanel) requestRun() {
 			golden = nominal
 		}
 		var pix []byte
+		tinted := false
 		switch {
 		case viewKind == "golden" && golden != nil:
 			pix = PackGray(golden)
 		case viewKind == "diff" && golden != nil:
 			pix = PackSignedDiff(golden, test)
 		default:
-			pix = PackGray(test)
+			if tint.on() && (!required || (aligned != nil && test == aligned)) {
+				pix = tint.pack(test)
+				tinted = true
+			} else {
+				pix = PackGray(test)
+			}
 		}
 		w, h := test.Width, test.Height
 		return func() {
@@ -1125,7 +1141,12 @@ func (p *DefectPanel) requestRun() {
 				// 只在学习结果落地时清除请求，被替换掉的排队任务不会吞掉"重新学习"。
 				p.relearn = false
 			}
-			if p.viewKind != viewKind {
+			key := tintKey{on: tinted, target: focusTarget}
+			if tinted {
+				key.rev = tintRev
+			}
+			p.tintShown = key
+			if p.viewKind != viewKind || p.focusTintKey() != p.tintShown {
 				PutRGBA(pix)
 				p.requestView()
 				return
@@ -1207,6 +1228,12 @@ func (p *DefectPanel) requestView() {
 	}
 	viewKind := p.viewKind
 	golden, test := p.golden, p.test
+	focusTarget := p.focus.target // the snapshot target: the job packs for this sub-tab
+	tint := p.focusTint()
+	tintRev := 0
+	if g := a.goldenBoard(); g != nil {
+		tintRev = g.Rev()
+	}
 	a.Jobs.Run("defect-view", func() func() {
 		var pix []byte
 		switch viewKind {
@@ -1215,12 +1242,22 @@ func (p *DefectPanel) requestView() {
 		case "diff":
 			pix = PackSignedDiff(golden, test)
 		default:
-			pix = PackGray(test)
+			pix = tint.pack(test)
 		}
 		w, h := test.Width, test.Height
 		return func() {
 			if a.Scene != scene || p.test != test {
 				PutRGBA(pix)
+				return
+			}
+			key := tintKey{on: tint.on(), target: focusTarget}
+			if key.on {
+				key.rev = tintRev
+			}
+			p.tintShown = key
+			if p.viewKind != viewKind || p.focusTintKey() != p.tintShown {
+				PutRGBA(pix)
+				p.requestView()
 				return
 			}
 			if p.active {
@@ -2020,6 +2057,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	ch := int(p.channel)
 	params := &p.inspectParams[ch]
 	Note(T("defect.insp.channel", "name", []string{"Red", "Green", "Blue"}[ch]))
+	Note(T("defect.insp.focusNow", "name", userMaskTargetName(p.focus.target)))
 	Note(T("defect.insp.explain"))
 	SliderInputF64(T("defect.insp.learnK"), "insp-learnk", &p.learnK, 0.5, 12, "%.1f")
 	if Button(T("defect.insp.relearn"), "insp-relearn") {
@@ -2066,9 +2104,17 @@ func (p *DefectPanel) drawParamsDialog() {
 		rerun = true
 	}
 	order := []inspect.Material{inspect.Metal, inspect.SR, inspect.Open, inspect.Base}
+	if p.focus.material() == inspect.SR {
+		order = []inspect.Material{inspect.SR, inspect.Metal, inspect.Open, inspect.Base}
+	}
+	focusMat := p.focus.material()
 	for _, m := range order {
 		mp := &params.Materials[m]
-		if !Section(m.String(), fmt.Sprintf("insp-sec-%d", m)) {
+		title := m.String()
+		if m == focusMat {
+			title = m.String() + "  " + T("defect.insp.focusMark")
+		}
+		if !Section(title, fmt.Sprintf("insp-sec-%d", m)) {
 			continue
 		}
 		if Check(T("defect.insp.enabled"), fmt.Sprintf("insp-en-%d", m), &mp.Enabled) {
@@ -2154,6 +2200,8 @@ func (p *DefectPanel) DrawRight() {
 			}
 			KVTable("defect-kv", rows)
 
+			p.drawFocusFilter(r)
+
 			params := p.inspectParams[p.channel]
 			mHeaders := []string{
 				T("defect.mcol.material"), T("defect.mcol.pixels"), T("defect.mcol.mean"), T("defect.mcol.std"),
@@ -2161,7 +2209,13 @@ func (p *DefectPanel) DrawRight() {
 				T("defect.mcol.bright"), T("defect.mcol.dark"),
 			}
 			mOrder := []inspect.Material{inspect.Metal, inspect.SR, inspect.Open, inspect.Base}
-			DataTable("defect-mstats", mHeaders, len(mOrder), 5*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+			selM := -1
+			for i, m := range mOrder {
+				if m == p.focus.material() {
+					selM = i
+				}
+			}
+			mClicked := DataTable("defect-mstats", mHeaders, len(mOrder), 5*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
 				m := mOrder[row]
 				ms := r.PerMaterial[m]
 				mp := params.Materials[m]
@@ -2193,45 +2247,53 @@ func (p *DefectPanel) DrawRight() {
 					return "-"
 				}
 				return fmt.Sprint(ms.Dark)
-			}, -1)
+			}, selM)
+			if mClicked == 0 || mClicked == 1 {
+				p.SelectSubTab(mClicked)
+			}
 
 			headers := []string{
 				T("defect.col.material"), T("defect.col.polarity"), T("defect.col.rule"), T("defect.col.area"), T("defect.col.size"),
 				T("defect.col.peakGv"), T("defect.col.excess"), T("defect.col.meanGv"),
 			}
 			defects := r.Defects
-			n := len(defects)
-			if n > maxResultRows {
-				n = maxResultRows
-			}
-			clicked := DataTable("defect-blobs", headers, n, 12*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
-				d := defects[row]
-				switch col {
-				case 0:
-					return d.Material.String()
-				case 1:
-					if d.Polarity == inspect.Bright {
-						return T("defect.polarity.bright")
-					}
-					return T("defect.polarity.dark")
-				case 2:
-					return ruleLabel(d.Rules)
-				case 3:
-					return fmt.Sprint(d.Area)
-				case 4:
-					return fmt.Sprintf("%dx%d", d.BBox.W, d.BBox.H)
-				case 5:
-					return fmt.Sprint(d.PeakGV)
-				case 6:
-					return F(d.Excess, 1)
+			idx := p.focusRows()
+			if len(idx) == 0 {
+				Note(T("defect.filter.empty"))
+			} else {
+				n := len(idx)
+				if n > maxResultRows {
+					n = maxResultRows
 				}
-				return F(d.MeanGV, 1)
-			}, -1)
-			if clicked >= 0 && clicked < n {
-				a.Viewer.CenterOn(defects[clicked].CentroidX, defects[clicked].CentroidY)
-			}
-			if len(defects) > maxResultRows {
-				Note(T("defect.result.truncated", "shown", maxResultRows, "total", len(defects)))
+				clicked := DataTable("defect-blobs", headers, n, 12*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+					d := defects[idx[row]]
+					switch col {
+					case 0:
+						return d.Material.String()
+					case 1:
+						if d.Polarity == inspect.Bright {
+							return T("defect.polarity.bright")
+						}
+						return T("defect.polarity.dark")
+					case 2:
+						return ruleLabel(d.Rules)
+					case 3:
+						return fmt.Sprint(d.Area)
+					case 4:
+						return fmt.Sprintf("%dx%d", d.BBox.W, d.BBox.H)
+					case 5:
+						return fmt.Sprint(d.PeakGV)
+					case 6:
+						return F(d.Excess, 1)
+					}
+					return F(d.MeanGV, 1)
+				}, -1)
+				if clicked >= 0 && clicked < n {
+					a.Viewer.CenterOn(defects[idx[clicked]].CentroidX, defects[idx[clicked]].CentroidY)
+				}
+				if len(idx) > maxResultRows {
+					Note(T("defect.result.truncated", "shown", maxResultRows, "total", len(idx)))
+				}
 			}
 		}
 	}
@@ -2294,9 +2356,15 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 	if p.lastReport != nil {
 		labels := 0
 		boxes := 0
-		for _, d := range p.lastReport.Defects {
+		filter := p.mode == modeDetect
+		defs := p.lastReport.Defects
+		for i := range defs {
 			if boxes >= maxOverlayBoxes {
 				break
+			}
+			d := &defs[i]
+			if filter && !p.focus.match(d) {
+				continue
 			}
 			if !o.Visible(float64(d.BBox.X), float64(d.BBox.Y), float64(d.BBox.W), float64(d.BBox.H)) {
 				continue
