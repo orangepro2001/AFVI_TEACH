@@ -113,13 +113,39 @@ func (c *Config) UpsertReference(refRoot string) {
 	c.Active = m.Name
 }
 
-// ResolvePath resolves a configured path: "" stays "", absolute paths are unchanged and
-// relative paths are joined with BaseDir (or left cwd-relative when BaseDir is empty).
+func isSlash(b byte) bool { return b == '\\' || b == '/' }
+
+// IsUNC reports whether p is a network path (\\server..., also written //server...). It is
+// decided on the text so it behaves the same on every platform: filepath.IsAbs on Windows
+// rejects a bare server such as \\192.168.1.61 (no share part), and that path would then be
+// joined onto the config directory.
+func IsUNC(p string) bool {
+	return len(p) > 2 && isSlash(p[0]) && isSlash(p[1]) && !isSlash(p[2])
+}
+
+// IsUNCServerOnly reports whether p names only a server (\\host or \\host\), with no share.
+// Windows cannot stat such a path (it lists the server's shares, it is not a directory), but
+// the shares below it, e.g. \\host\PxRepository, are ordinary directories.
+func IsUNCServerOnly(p string) bool {
+	if !IsUNC(p) {
+		return false
+	}
+	for i := 2; i < len(p); i++ {
+		if isSlash(p[i]) {
+			return strings.Trim(p[i:], `\/`) == ""
+		}
+	}
+	return true
+}
+
+// ResolvePath resolves a configured path: "" stays "", absolute paths and network paths
+// (\\server\share, or just \\server) are unchanged and relative paths are joined with
+// BaseDir (or left cwd-relative when BaseDir is empty).
 func (c *Config) ResolvePath(p string) string {
 	if p == "" {
 		return ""
 	}
-	if filepath.IsAbs(p) {
+	if filepath.IsAbs(p) || IsUNC(p) {
 		return p
 	}
 	if c == nil || c.BaseDir == "" {

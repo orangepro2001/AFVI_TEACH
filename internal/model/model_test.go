@@ -195,3 +195,12 @@ func contains(s, sub string) bool {
 	}
 	return false
 }
+
+func TestCheckHostPathBareServer(t *testing.T) {
+	// \\host has no share part, Windows cannot stat it; it must not be reported as a
+	// missing path (only the PxRepository share below it can be missing)
+	_, err := model.CheckHostPath(&config.Config{BaseDir: t.TempDir()}, "FM1", `\\192.0.2.1`)
+	if err != model.ErrNoRepository {
+		t.Errorf("err = %v, want ErrNoRepository", err)
+	}
+}

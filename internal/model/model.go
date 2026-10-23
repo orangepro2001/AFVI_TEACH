@@ -33,7 +33,13 @@ type ModelInfo struct {
 
 var hosts = []string{"FM1", "FM2", "BM"}
 
+// isDir reports whether p is a directory. A bare network server (\\host) cannot be stat'ed,
+// so it counts as one; whether it really serves PxRepository is checked by the caller on
+// the share below it (\\host\PxRepository).
 func isDir(p string) bool {
+	if config.IsUNCServerOnly(p) {
+		return true
+	}
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
 }

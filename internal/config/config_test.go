@@ -227,6 +227,39 @@ func TestResolvePath(t *testing.T) {
 	}
 }
 
+func TestUNCPaths(t *testing.T) {
+	cases := []struct {
+		p         string
+		unc, only bool
+	}{
+		{`\\192.168.1.61`, true, true},
+		{`\\192.168.1.61\`, true, true},
+		{`//192.168.1.61`, true, true},
+		{`\\192.168.1.61\PxRepository`, true, false},
+		{`\\srv\share\sub`, true, false},
+		{`\\`, false, false},
+		{`\\\x`, false, false},
+		{`C:\data`, false, false},
+		{`rel\x`, false, false},
+		{``, false, false},
+	}
+	for _, c := range cases {
+		if got := IsUNC(c.p); got != c.unc {
+			t.Errorf("IsUNC(%q) = %v, want %v", c.p, got, c.unc)
+		}
+		if got := IsUNCServerOnly(c.p); got != c.only {
+			t.Errorf("IsUNCServerOnly(%q) = %v, want %v", c.p, got, c.only)
+		}
+	}
+	// a network path is never joined onto the config directory, even a bare server
+	cfg := &Config{BaseDir: "/base"}
+	for _, p := range []string{`\\192.168.1.61`, `\\192.168.1.61\PxRepository`, `//srv/share`} {
+		if got := cfg.ResolvePath(p); got != p {
+			t.Errorf("ResolvePath(%q) = %q, want unchanged", p, got)
+		}
+	}
+}
+
 func TestSaveLoad(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "afvi.toml")
