@@ -1,95 +1,47 @@
 package app
 
-import (
-	"github.com/AllenDang/cimgui-go/imgui"
-)
+import "afvi/teach-imgui/internal/ui"
 
-// drawLogin draws the modal login dialog. It is shown from the menu and the toolbar of
+// buildLogin records the modal login dialog. It is shown from the menu and the toolbar of
 // the operator and at start-up in the studio (locked: the dialog cannot be cancelled).
-func (a *App) drawLogin() {
-	if a.loginOpen {
-		imgui.OpenPopupStr("login")
-		a.loginOpen = false
-	}
-	vp := imgui.MainViewport()
-	center := imgui.NewVec2(vp.Pos().X+vp.Size().X/2, vp.Pos().Y+vp.Size().Y/2)
-	imgui.SetNextWindowPosV(center, imgui.CondAlways, imgui.NewVec2(0.5, 0.5))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(400), sc(210)), imgui.CondAlways)
-	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
-		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoScrollbar
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
-	open := imgui.BeginPopupModalV("login", nil, flags)
-	imgui.PopStyleVar()
-	if !open {
+func (a *App) buildLogin() {
+	if !a.loginOpen {
 		return
 	}
-	wp, ws := imgui.WindowPos(), imgui.WindowSize()
-	dl := imgui.WindowDrawList()
-	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
-	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
-	Caption(dl, capMin, capMax, T("login.title"), true)
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
-	if ButtonSized("x", "login-close", imgui.NewVec2(sc(16), sc(14)), !a.loginLocked) {
-		a.closeLogin()
+	submit := func() {
+		a.TryLogin(a.loginUser, a.loginPass)
 	}
-
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(44)))
-	labelColumn(T("login.user"))
-	imgui.InputTextWithHint("##login-user", "", &a.loginUser, imgui.InputTextFlagsNone, nil)
-	ItemEdge(EdgeSunken)
-
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(72)))
-	labelColumn(T("login.password"))
-	imgui.InputTextWithHint("##login-pass", "", &a.loginPass, imgui.InputTextFlagsPassword, nil)
-	ItemEdge(EdgeSunken)
-
-	if a.loginErr != "" {
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(98)))
-		imgui.TextColored(CurrentPalette().NG, T(a.loginErr))
-	} else {
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(16), wp.Y+sc(98)))
-		Note(T("login.hint"))
-	}
-
-	okLabel, cancelLabel := T("login.ok"), T("login.cancel")
-	if a.loginLocked {
-		cancelLabel = T("login.exit")
-	}
-	okW, cancelW := ButtonWidth(okLabel), ButtonWidth(cancelLabel)
-	if okW < sc(75) {
-		okW = sc(75)
-	}
-	if cancelW < sc(75) {
-		cancelW = sc(75)
-	}
-	spacing := imgui.CurrentStyle().ItemSpacing().X
-	btnX := wp.X + ws.X - sc(16) - okW - cancelW - spacing
-	btnY := wp.Y + sc(210) - sc(30)
-	imgui.SetCursorScreenPos(imgui.NewVec2(btnX, btnY))
-	if ButtonSized(okLabel, "login-ok", imgui.NewVec2(okW, imgui.FrameHeight()+2), true) {
-		if a.TryLogin(a.loginUser, a.loginPass) {
-			imgui.CloseCurrentPopup()
-		}
-	}
-	imgui.SetCursorScreenPos(imgui.NewVec2(btnX+okW+spacing, btnY))
-	if ButtonSized(cancelLabel, "login-cancel", imgui.NewVec2(cancelW, imgui.FrameHeight()+2), true) {
-		if a.loginLocked {
-			a.be.SetShouldClose(true)
+	closed := ui.Dialog(T("login.title"), "login", 400, func() {
+		InputText(T("login.user"), "login-user", &a.loginUser, "")
+		ui.InputTextEx(T("login.password"), "login-pass", &a.loginPass, "", true)
+		if a.loginErr != "" {
+			ui.TextTone(T(a.loginErr), "bad")
 		} else {
-			a.closeLogin()
+			Note(T("login.hint"))
 		}
-	}
-
-	if imgui.IsKeyPressedBool(imgui.KeyEnter) {
-		if a.TryLogin(a.loginUser, a.loginPass) {
-			imgui.CloseCurrentPopup()
+		ui.Spacing()
+		if ui.ButtonEx(T("login.ok"), "login-ok", true, true) {
+			submit()
 		}
+		ui.SameLine()
+		cancel := T("login.cancel")
+		if a.loginLocked {
+			cancel = T("login.exit")
+		}
+		if Button(cancel, "login-cancel") {
+			if a.loginLocked {
+				a.Quit()
+			} else {
+				a.closeLogin()
+			}
+		}
+	})
+	if ui.KeyPressed("Enter") {
+		submit()
 	}
-	if imgui.IsKeyPressedBool(imgui.KeyEscape) && !a.loginLocked {
+	if (closed || ui.KeyPressed("Escape")) && !a.loginLocked {
 		a.closeLogin()
 	}
-	imgui.EndPopup()
 }
 
 // closeLogin closes the dialog without logging in and forgets the password.
@@ -97,7 +49,6 @@ func (a *App) closeLogin() {
 	a.loginOpen = false
 	a.loginPass = ""
 	a.loginErr = ""
-	imgui.CloseCurrentPopup()
 }
 
 func init() {

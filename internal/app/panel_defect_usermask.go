@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/golden"
 )
 
@@ -171,14 +169,11 @@ func (p *DefectPanel) drawUserMaskSection() {
 	}
 	for i := 0; i < shown; i++ {
 		r := um.Regions[i]
-		imgui.PushIDInt(int32(i))
-		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(userMaskRegionLabel(i, r))
-		imgui.SameLine()
-		if Button(T("defect.usermask.delete"), "defect-um-del") {
+		Text(userMaskRegionLabel(i, r))
+		SameLine()
+		if Button(T("defect.usermask.delete"), fmt.Sprintf("defect-um-del-%d", i)) {
 			b.RemoveUserRegion(i)
 		}
-		imgui.PopID()
 	}
 	if len(um.Regions) > maxRows {
 		Note(T("defect.usermask.more", "n", strconv.Itoa(len(um.Regions)-maxRows)))
@@ -338,8 +333,7 @@ func (p *DefectPanel) userMaskOverlay(o *Overlay) {
 // userMaskLabel draws "Metal N" / "SR N" at the top-left of the region box when it is wide
 // enough on screen.
 func userMaskLabel(o *Overlay, x, y, w, h float64, col uint32, t golden.Target, i int) {
-	a, b := o.ToScreen(x, y), o.ToScreen(x+w, y+h)
-	if b.X-a.X < 24 {
+	if w*float64(o.Scale()) < 24 {
 		return
 	}
 	o.Text(x, y, 2, -2, col, fmt.Sprintf("%s %d", userMaskTargetName(t), i+1))

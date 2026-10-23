@@ -48,7 +48,7 @@ if (-not (Test-Path -LiteralPath $mingwBin)) {
     exit 1
 }
 $env:PATH = $mingwBin + ';' + $env:PATH
-$env:CGO_ENABLED = '1'
+$env:CGO_ENABLED = '0'
 
 if ($Offline) {
     $env:GOPROXY = 'off'
@@ -109,7 +109,7 @@ $binDir = Join-Path $Root 'bin'
 if (-not (Test-Path -LiteralPath $binDir)) {
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 }
-& go build -ldflags "-s -w -extldflags=-static" -o bin\teach-imgui.exe ./cmd/teach-imgui
+& go build -tags production -ldflags "-s -w -H windowsgui" -o bin\teach-imgui.exe ./cmd/teach-imgui
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'go build failed.'
     exit 1
@@ -121,7 +121,7 @@ Write-Host ("Built {0} ({1} MB)" -f $exe, $sizeMB)
 
 # --- 4b. camera-gui (studio, cgo like the teach program) ---------------------
 Write-Host '==> go build camera-gui'
-& go build -ldflags "-s -w -extldflags=-static" -o bin\camera-gui.exe ./cmd/camera-gui
+& go build -tags production -ldflags "-s -w -H windowsgui" -o bin\camera-gui.exe ./cmd/camera-gui
 if ($LASTEXITCODE -ne 0) {
     Write-Error 'go build camera-gui failed.'
     exit 1
@@ -135,7 +135,7 @@ Write-Host '==> go build camera (pure Go, no cgo)'
 $env:CGO_ENABLED = '0'
 & go build -ldflags "-s -w" -o bin\camera.exe ./cmd/camera
 $cameraExit = $LASTEXITCODE
-$env:CGO_ENABLED = '1'
+$env:CGO_ENABLED = '0'
 if ($cameraExit -ne 0) {
     Write-Error 'go build camera failed.'
     exit 1
@@ -145,6 +145,10 @@ $cameraSizeMB = [math]::Round((Get-Item -LiteralPath $cameraExe).Length / 1MB, 2
 Write-Host ("Built {0} ({1} MB)" -f $cameraExe, $cameraSizeMB)
 
 # --- 5. optional self-test ---------------------------------------------------
+if ($Selftest) {
+    Write-Warning 'The ImGui -selftest is gone; use scripts/e2e-wsl.sh (Playwright) instead.'
+    $Selftest = $false
+}
 if ($Selftest) {
     if (-not (Test-Path -LiteralPath $Out)) {
         New-Item -ItemType Directory -Path $Out -Force | Out-Null

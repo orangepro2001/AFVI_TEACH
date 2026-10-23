@@ -3,8 +3,6 @@ package app
 import (
 	"fmt"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	snapfmt "afvi/teach-imgui/internal/snap"
 )
@@ -65,8 +63,8 @@ func (p *DefectPanel) drawWarpSection() bool {
 		return false
 	}
 	if p.scrollToWarp {
+		// The browser keeps the section where the user left it; the flag is just consumed.
 		p.scrollToWarp = false
-		imgui.SetScrollHereYV(0)
 	}
 	changed := false
 	was := p.warped()
@@ -172,10 +170,4 @@ func init() {
 		"warp.preset.lift":       "들뜸",
 		"warp.preset.camera":     "카메라 기본 어긋남",
 	})
-}
-
-// legendSwatch draws a small coloured square followed by a label (used by the align overlay legend).
-func legendSwatch(dl *imgui.DrawList, at imgui.Vec2, col uint32, text string, textCol uint32) {
-	dl.AddRectFilled(at, imgui.NewVec2(at.X+10, at.Y+10), col)
-	dl.AddTextVec2(imgui.NewVec2(at.X+16, at.Y-2), textCol, text)
 }

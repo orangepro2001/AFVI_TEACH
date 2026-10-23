@@ -13,8 +13,6 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/tiff"
 
@@ -166,12 +164,12 @@ func (p *DefectPanel) drawManualSection() {
 	}
 	Note(T("defect.manual.note"))
 	loadLabel := T("defect.manual.loadImage")
-	if ButtonSized(loadLabel, "manual-load", imgui.NewVec2(ButtonWidth(loadLabel), imgui.FrameHeight()+2), !p.a.Jobs.Busy("load-image")) {
+	if ButtonOn(loadLabel, "manual-load", !p.a.Jobs.Busy("load-image")) {
 		p.pickAndLoadImage()
 	}
-	imgui.SameLine()
+	SameLine()
 	inspectLabel := T("defect.manual.inspect")
-	if ButtonSized(inspectLabel, "manual-inspect", imgui.NewVec2(ButtonWidth(inspectLabel), imgui.FrameHeight()+2), p.a.Scene != nil && !p.a.Jobs.Busy("defect")) {
+	if ButtonOn(inspectLabel, "manual-inspect", p.a.Scene != nil && !p.a.Jobs.Busy("defect")) {
 		p.requestInspect()
 	}
 	if p.user.img != nil {

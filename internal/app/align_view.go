@@ -6,9 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 // The align tab's views: the overlay shows the template in red and the warped input in cyan,
@@ -126,16 +125,15 @@ func (p *AlignPanel) alignedNow() *alignedResult {
 	return p.aligned
 }
 
-// levelColor is the text colour of a verdict level.
-func levelColor(l core.VerdictLevel) imgui.Vec4 {
-	pal := CurrentPalette()
+// levelColor is the text tone of a verdict level (good / warn / bad).
+func levelColor(l core.VerdictLevel) string {
 	switch l {
 	case core.VerdictOK:
-		return pal.OK
+		return "good"
 	case core.VerdictManual:
-		return pal.Warn
+		return "warn"
 	}
-	return pal.NG
+	return "bad"
 }
 
 // levelOverlayColor is the overlay colour of a verdict level.
@@ -159,58 +157,32 @@ func levelText(l core.VerdictLevel) string { return T("align.level." + string(l)
 
 // VerdictBanner is the big full-width verdict lamp: OK green, MANUAL yellow, NG red.
 func VerdictBanner(level core.VerdictLevel, title string) {
-	bg, fg := rgba(0, 192, 0, 255), rgba(0, 0, 0, 255)
+	lv := "ok"
 	switch level {
 	case core.VerdictManual:
-		bg = rgba(255, 216, 0, 255)
+		lv = "manual"
 	case core.VerdictNG:
-		bg, fg = rgba(255, 0, 0, 255), rgba(255, 255, 255, 255)
+		lv = "ng"
 	}
-	avail := imgui.ContentRegionAvail().X
-	imgui.PushFont(imgui.CurrentFont(), imgui.CurrentStyle().FontSizeBase()*1.5)
-	ts := imgui.CalcTextSize(title)
-	h := ts.Y + sc(14)
-	pos := imgui.CursorScreenPos()
-	end := imgui.NewVec2(pos.X+avail, pos.Y+h)
-	dl := imgui.WindowDrawList()
-	dl.AddRectFilled(pos, end, bg)
-	DrawEdge(dl, pos, end, EdgeSunken)
-	dl.AddTextVec2(imgui.NewVec2(pos.X+(avail-ts.X)/2, pos.Y+(h-ts.Y)/2), fg, title)
-	imgui.PopFont()
-	imgui.Dummy(imgui.NewVec2(avail, h))
+	ui.AlignBanner(title, lv)
 }
 
-// tableCell is one cell of ResultTable; a nil colour keeps the default text colour.
+// tableCell is one cell of ResultTable; an empty tone keeps the default text colour.
 type tableCell struct {
 	text string
-	col  *imgui.Vec4
+	tone string
 }
 
 // ResultTable shows a small read-only grid with optionally coloured cells.
 func ResultTable(id string, headers []string, rows [][]tableCell) {
-	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBorders | imgui.TableFlagsSizingStretchProp
-	if !imgui.BeginTableV("##rt-"+id+"-"+string(CurrentLang()), int32(len(headers)), flags, imgui.NewVec2(0, 0), 0) {
-		return
-	}
-	for _, h := range headers {
-		imgui.TableSetupColumnV(h, 0, 0, 0)
-	}
-	imgui.TableHeadersRow()
-	for _, row := range rows {
-		imgui.TableNextRow()
-		for c, cell := range row {
-			imgui.TableSetColumnIndex(int32(c))
-			if cell.col != nil {
-				imgui.PushStyleColorVec4(imgui.ColText, *cell.col)
-			}
-			imgui.TextUnformatted(cell.text)
-			if cell.col != nil {
-				imgui.PopStyleColor()
-			}
-		}
-	}
-	imgui.EndTable()
+	DataTableColored(id+"-"+string(CurrentLang()), headers, len(rows), len(rows)+1, func(r, c int) ui.Cell {
+		cell := rows[r][c]
+		return ui.Cell{T: cell.text, Tone: cell.tone}
+	}, -1)
 }
+
+// wrappedColored is wrapped text in a tone colour (good / warn / bad / dim).
+func wrappedColored(text, tone string) { ui.AlignNoteTone(text, tone) }
 
 // fullPx converts a working-resolution distance to full-resolution pixels, the unit of every
 // number the align tab shows (the thresholds are converted the same way).
@@ -242,7 +214,7 @@ func (p *AlignPanel) drawVerdict() {
 		Warn(p.reasonText(reason))
 	}
 
-	imgui.Spacing()
+	ui.Spacing()
 	Note(T("align.truth.title"))
 	if p.truthChecked() {
 		maxErr := p.truth.MaxErrorPx
@@ -267,7 +239,7 @@ func (p *AlignPanel) drawVerdict() {
 		Note(T("align.truth.none"))
 	}
 
-	imgui.Spacing()
+	ui.Spacing()
 	if r.Fit != nil && p.reportW > 0 {
 		sc := float64(p.lastScale)
 		truthPose := core.TruthPose(&p.reportParams, p.reportW, p.reportH)
@@ -275,7 +247,7 @@ func (p *AlignPanel) drawVerdict() {
 		shiftCell := func(set, got float64) []tableCell {
 			d := got - set
 			col := levelColor(errLevel(math.Abs(d), cfg))
-			return []tableCell{{text: F(set*sc, 2)}, {text: F(got*sc, 2)}, {text: F(d*sc, 2), col: &col}}
+			return []tableCell{{text: F(set*sc, 2)}, {text: F(got*sc, 2)}, {text: F(d*sc, 2), tone: col}}
 		}
 		rows := [][]tableCell{
 			append([]tableCell{{text: T("align.pose.shiftX")}}, shiftCell(truthPose.ShiftX, fitPose.ShiftX)...),
@@ -293,12 +265,9 @@ func (p *AlignPanel) drawVerdict() {
 	}
 
 	rmsCol := levelColor(errLevel(r.ResidualRms, cfg))
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("align.result.residualRms") + ": ")
-	imgui.SameLine()
-	imgui.PushStyleColorVec4(imgui.ColText, rmsCol)
-	imgui.TextUnformatted(F(p.fullPx(r.ResidualRms), 3) + " px")
-	imgui.PopStyleColor()
+	Text(T("align.result.residualRms") + ": ")
+	SameLine()
+	ui.TextTone(F(p.fullPx(r.ResidualRms), 3)+" px", rmsCol)
 	Note(T("align.result.thresholds", "ok", F(p.fullPx(cfg.OkResidualPx), 2), "ng", F(p.fullPx(cfg.NgResidualPx), 2)))
 	rows := [][2]string{
 		{T("align.result.meanNcc"), F(r.MeanNcc, 4)},
@@ -314,12 +283,9 @@ func (p *AlignPanel) drawVerdict() {
 	}
 	if c := al.check; c.Windows > 0 {
 		col := levelColor(errLevel(c.MaxPx, cfg))
-		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(T("align.check.label") + ": ")
-		imgui.SameLine()
-		imgui.PushStyleColorVec4(imgui.ColText, col)
-		imgui.TextUnformatted(F(p.fullPx(c.MaxPx), 2) + " / " + F(p.fullPx(c.RmsPx), 2) + " px")
-		imgui.PopStyleColor()
+		Text(T("align.check.label") + ": ")
+		SameLine()
+		ui.TextTone(F(p.fullPx(c.MaxPx), 2)+" / "+F(p.fullPx(c.RmsPx), 2)+" px", col)
 		Note(T("align.check.note", "n", strconv.Itoa(c.Windows), "total", strconv.Itoa(c.Total),
 			"ok", F(p.fullPx(cfg.OkResidualPx), 2)))
 	} else {
@@ -343,48 +309,42 @@ func (p *AlignPanel) drawRoiResults() {
 		T("align.col.residual"), T("align.col.match"), T("align.col.truth"), T("align.col.status"),
 	}
 	matches := r.Matches
-	cell := func(row, col int) (string, *imgui.Vec4) {
+	cell := func(row, col int) ui.Cell {
 		m := matches[row]
 		switch col {
 		case 0:
-			return m.Name, nil
+			return ui.Cell{T: m.Name}
 		case 1:
-			return F(m.Ncc, 4), nil
+			return ui.Cell{T: F(m.Ncc, 4)}
 		case 2:
-			return F(m.Uniqueness, 4), nil
+			return ui.Cell{T: F(m.Uniqueness, 4)}
 		case 3:
 			if row < len(r.Residuals) && r.Residuals[row] >= 0 {
-				c := levelColor(errLevel(r.Residuals[row], cfg))
-				return F(p.fullPx(r.Residuals[row]), 3), &c
+				return ui.Cell{T: F(p.fullPx(r.Residuals[row]), 3), Tone: levelColor(errLevel(r.Residuals[row], cfg))}
 			}
-			return "—", nil
+			return ui.Cell{T: "—"}
 		case 4:
 			if row < len(p.diag) && !math.IsNaN(p.diag[row].MatchErrPx) {
 				e := p.diag[row].MatchErrPx
-				c := levelColor(errLevel(e, cfg))
-				return F(p.fullPx(e), 3), &c
+				return ui.Cell{T: F(p.fullPx(e), 3), Tone: levelColor(errLevel(e, cfg))}
 			}
-			return "—", nil
+			return ui.Cell{T: "—"}
 		case 5:
 			if p.truth != nil && row < len(p.truth.PerRoiErrorPx) && !math.IsNaN(p.truth.PerRoiErrorPx[row]) {
 				e := p.truth.PerRoiErrorPx[row]
-				c := levelColor(errLevel(e, cfg))
-				return F(p.fullPx(e), 3), &c
+				return ui.Cell{T: F(p.fullPx(e), 3), Tone: levelColor(errLevel(e, cfg))}
 			}
-			return "—", nil
+			return ui.Cell{T: "—"}
 		}
 		if !m.Located {
-			c := levelColor(core.VerdictNG)
-			return p.matchReasonText(m.Reason), &c
+			return ui.Cell{T: p.matchReasonText(m.Reason), Tone: levelColor(core.VerdictNG)}
 		}
 		if row < len(r.Residuals) && r.Residuals[row] >= 0 {
-			c := levelColor(core.VerdictOK)
-			return T("align.status.inlier"), &c
+			return ui.Cell{T: T("align.status.inlier"), Tone: levelColor(core.VerdictOK)}
 		}
-		c := levelColor(core.VerdictManual)
-		return T("align.status.outlier"), &c
+		return ui.Cell{T: T("align.status.outlier"), Tone: levelColor(core.VerdictManual)}
 	}
-	clicked := DataTableColored("align-matches", headers, len(matches), 8*imgui.FrameHeightWithSpacing()+8, cell, p.selected)
+	clicked := DataTableColored("align-matches", headers, len(matches), 8, cell, p.selected)
 	if clicked >= 0 && clicked < len(matches) {
 		p.selected = clicked
 		m := matches[clicked]
@@ -397,7 +357,7 @@ func (p *AlignPanel) drawRoiResults() {
 	}
 	Note(T("align.col.explain"))
 	if notes := p.roiNotes(); len(notes) > 0 {
-		imgui.Spacing()
+		ui.Spacing()
 		Note(T("align.notes.title"))
 		for _, n := range notes {
 			switch n.level {
@@ -546,7 +506,6 @@ func (p *AlignPanel) drawAlignOverlay(o *Overlay) {
 		o.Line(truth.X, truth.Y, pred.X, pred.Y, col, 2)
 		o.Text(pred.X-rw/2, pred.Y-rh/2, 0, -16, col, label)
 	}
-	p.drawAlignLegend(o)
 }
 
 // drawAlignedOverlay marks, on the realigned image, where every ROI ought to be (grey dashes, the
@@ -604,15 +563,6 @@ func (p *AlignPanel) drawAlignedOverlay(o *Overlay) {
 		o.Rect(c.Worst.X-half, c.Worst.Y-half, float64(c.Win), float64(c.Win), col, 2)
 		o.Text(c.Worst.X-half, c.Worst.Y-half, 2, -16, col, T("align.check.worst", "px", F(p.fullPx(c.MaxPx), 2)))
 	}
-	entries := []legendEntry{{OverlayMuted, T("align.legend.design")}}
-	if fit != nil {
-		entries = append(entries,
-			legendEntry{OverlayROI, T("align.legend.alignedTruth")},
-			legendEntry{OverlayNG, T("align.legend.match")},
-			legendEntry{OverlayWarn, T("align.legend.rest")},
-		)
-	}
-	drawLegend(o, entries)
 }
 
 // hoverAligned is the status-bar text of the aligned views.
@@ -639,42 +589,44 @@ func (p *AlignPanel) hoverAligned(x, y int) string {
 	return fmt.Sprintf("GV %d", a)
 }
 
-// drawAlignLegend explains the overlay's colours in the corner of the canvas.
-func (p *AlignPanel) drawAlignLegend(o *Overlay) {
-	drawLegend(o, []legendEntry{
-		{OverlayMuted, T("align.legend.design")},
-		{OverlayROI, T("align.legend.truth")},
-		{OverlayOK, T("align.legend.found")},
-		{OverlayNG, T("align.legend.match")},
-		{OverlayWarn, T("align.legend.shift")},
-	})
-}
-
-// legendEntry is one colour swatch with its explanation in a canvas legend.
+// legendEntry is one colour swatch with its explanation in the canvas legend.
 type legendEntry struct {
 	col  uint32
 	text string
 }
 
-// drawLegend draws a legend box in the bottom-right corner of the canvas.
-func drawLegend(o *Overlay, entries []legendEntry) {
-	var width float32
-	for _, e := range entries {
-		if tw := imgui.CalcTextSize(e.text).X; tw > width {
-			width = tw
-		}
+// legendEntries are the colours the overlay of the current view uses. The canvas has no
+// screen-space drawing, so the legend is listed in the right panel (drawLegend).
+func (p *AlignPanel) legendEntries() []legendEntry {
+	if p.template == nil || p.viewKind == "template" {
+		return nil
 	}
-	line := imgui.TextLineHeightWithSpacing()
-	pad := sc(6)
-	boxW := width + sc(16) + 2*pad
-	boxH := float32(len(entries))*line + 2*pad
-	// Bottom-right corner: the top-right holds the tool palette and the ROIs sit mostly on the left.
-	origin := imgui.NewVec2(o.Max.X-boxW-sc(8), o.Max.Y-boxH-sc(8))
-	end := imgui.NewVec2(origin.X+boxW, origin.Y+boxH)
-	o.DL.AddRectFilled(origin, end, rgba(0, 0, 0, 150))
-	for i, e := range entries {
-		at := imgui.NewVec2(origin.X+pad, origin.Y+pad+float32(i)*line+2)
-		legendSwatch(o.DL, at, e.col, e.text, rgba(255, 255, 255, 255))
+	if isAlignedView(p.viewKind) {
+		entries := []legendEntry{{OverlayMuted, T("align.legend.design")}}
+		if p.alignFit() != nil {
+			entries = append(entries,
+				legendEntry{OverlayROI, T("align.legend.alignedTruth")},
+				legendEntry{OverlayNG, T("align.legend.match")},
+				legendEntry{OverlayWarn, T("align.legend.rest")},
+			)
+		}
+		return entries
+	}
+	return []legendEntry{
+		{OverlayMuted, T("align.legend.design")},
+		{OverlayROI, T("align.legend.truth")},
+		{OverlayOK, T("align.legend.found")},
+		{OverlayNG, T("align.legend.match")},
+		{OverlayWarn, T("align.legend.shift")},
+	}
+}
+
+// drawLegend lists the legend entries as colour chips with their explanation.
+func drawLegend(entries []legendEntry) {
+	for _, e := range entries {
+		Swatch(e.col)
+		SameLine()
+		Text(e.text)
 	}
 }
 
@@ -912,5 +864,15 @@ func init() {
 		"align.check.note":          "왜곡되지 않은 원본 이미지(가상 이미지가 아님)를 {total}개 창으로 나눠 정렬된 이미지에서 다시 찾고({n}개 찾음) 각 창이 아직 얼마나 벗어났는지 측정합니다. 색은 OK/NG 임계값 기준(OK ≤ {ok} px). ROI 잔차는 ROI 위치만 보지만 이 값은 이미지 전체를 봅니다.",
 		"align.check.none":          "정렬된 이미지에 확인할 수 있는 창이 없습니다(이미지가 작거나 데이터·질감이 부족).",
 		"align.gain.note":           "데이터가 있는 픽셀에 대한 평균 |원본 − 이미지| 밝기 차이(원본 = 왜곡 전 실제 이미지, 이미지 템플릿이면 템플릿 자체)이며 가림 영역은 제외합니다. 작을수록 좋고, 노이즈·조명·유사 변환으로 표현할 수 없는 들뜸 때문에 0까지 내려가지는 않습니다.",
+	})
+}
+
+func init() {
+	Messages(map[string]string{
+		"align.legend.title": "图例",
+	}, map[string]string{
+		"align.legend.title": "Legend",
+	}, map[string]string{
+		"align.legend.title": "범례",
 	})
 }

@@ -12,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	snapfmt "afvi/teach-imgui/internal/snap"
 )
@@ -491,7 +489,7 @@ func (p *DefectPanel) drawSnapSection() bool {
 		}
 	}
 	enabled := !p.a.Jobs.Busy("snap")
-	if ButtonSized(T("defect.snap.button"), "snap-go", imgui.NewVec2(ButtonWidth(T("defect.snap.button")), imgui.FrameHeight()+2), enabled) {
+	if ButtonOn(T("defect.snap.button"), "snap-go", enabled) {
 		p.requestSnap()
 	}
 	if p.snapSrc.pathAuto || strings.TrimSpace(p.snapSrc.path) == "" {
@@ -503,9 +501,9 @@ func (p *DefectPanel) drawSnapSection() bool {
 	if Button(T("defect.snap.load"), "snap-load") {
 		p.requestSnapLoad(p.snapSrc.path)
 	}
-	imgui.SameLine()
+	SameLine()
 	saveLabel := T("defect.snap.save")
-	if ButtonSized(saveLabel, "snap-save", imgui.NewVec2(ButtonWidth(saveLabel), imgui.FrameHeight()+2), !p.a.Jobs.Busy("session-save")) {
+	if ButtonOn(saveLabel, "snap-save", !p.a.Jobs.Busy("session-save")) {
 		p.requestSaveSession()
 	}
 	Note(T("defect.save.note"))

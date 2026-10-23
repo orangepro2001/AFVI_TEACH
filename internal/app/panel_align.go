@@ -7,9 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 func init() {
@@ -381,6 +380,8 @@ type AlignPanel struct {
 	diag         []core.RoiDiagnosis // per ROI: match error, deviation from the fit, border overhang, occlusion
 	fitInput     *core.GrayImage     // the input image the report's fit was computed for; alignFit is nil once input differs
 	aligned      *alignedResult      // the input brought onto the template grid with report.Fit
+
+	hoverRoi bool // the cursor is over a ROI body (select tool claims the drag only there)
 
 	dragging  bool
 	dragStart core.Point
@@ -855,14 +856,11 @@ func (p *AlignPanel) DrawLeft() {
 		} else {
 			del := -1
 			for i, o := range p.occs {
-				imgui.PushIDInt(int32(i))
-				imgui.AlignTextToFramePadding()
-				imgui.TextUnformatted(fmt.Sprintf("x%.0f y%.0f w%.0f h%.0f v%.0f", o.X, o.Y, o.W, o.H, o.Value))
-				imgui.SameLine()
-				if Button(T("align.occlusion.delete"), "align-occ-del") {
+				Text(fmt.Sprintf("x%.0f y%.0f w%.0f h%.0f v%.0f", o.X, o.Y, o.W, o.H, o.Value))
+				SameLine()
+				if Button(T("align.occlusion.delete"), fmt.Sprintf("align-occ-del-%d", i)) {
 					del = i
 				}
-				imgui.PopID()
 			}
 			if del >= 0 {
 				p.occs = append(p.occs[:del], p.occs[del+1:]...)
@@ -935,17 +933,16 @@ func (p *AlignPanel) DrawLeft() {
 		} else {
 			del := -1
 			for i, r := range p.rois {
-				imgui.PushIDInt(int32(i))
+				// A latching tool button stands in for the ImGui selectable row.
 				sel := i == p.selected
-				if imgui.SelectableBoolV(fmt.Sprintf("%s  x%.0f y%.0f w%.0f h%.0f", r.Name, r.X, r.Y, r.W, r.H), sel, 0, imgui.NewVec2(0, 0)) {
+				if ToolButton(fmt.Sprintf("%s  x%.0f y%.0f w%.0f h%.0f", r.Name, r.X, r.Y, r.W, r.H), fmt.Sprintf("align-roi-sel-%d", i), sel) {
 					p.selected = i
 					a.Viewer.CenterOn(r.X/float64(p.scale)+r.W/float64(p.scale)/2, r.Y/float64(p.scale)+r.H/float64(p.scale)/2)
 				}
-				imgui.SameLine()
-				if Button(T("align.occlusion.delete"), "align-roi-del") {
+				SameLine()
+				if Button(T("align.occlusion.delete"), fmt.Sprintf("align-roi-del-%d", i)) {
 					del = i
 				}
-				imgui.PopID()
 			}
 			if del >= 0 {
 				p.rois = append(p.rois[:del], p.rois[del+1:]...)
@@ -955,7 +952,7 @@ func (p *AlignPanel) DrawLeft() {
 				changed = true
 			}
 		}
-		if imgui.IsKeyPressedBool(imgui.KeyDelete) && !imgui.IsAnyItemActive() && p.selected >= 0 && p.selected < len(p.rois) {
+		if ui.KeyPressed("Delete") && p.selected >= 0 && p.selected < len(p.rois) {
 			p.rois = append(p.rois[:p.selected], p.rois[p.selected+1:]...)
 			p.selected = -1
 			changed = true
@@ -1007,6 +1004,11 @@ func (p *AlignPanel) DrawLeft() {
 }
 
 func (p *AlignPanel) DrawRight() {
+	if entries := p.legendEntries(); len(entries) > 0 {
+		if Section(T("align.legend.title"), "align-legend") {
+			drawLegend(entries)
+		}
+	}
 	if Section(T("align.section.verdict"), "align-verdict") {
 		p.drawVerdict()
 	}
@@ -1017,11 +1019,7 @@ func (p *AlignPanel) DrawRight() {
 		if p.heat == nil {
 			Note(T("align.result.empty"))
 		} else {
-			size := imgui.ContentRegionAvail().X
-			if size > 320 {
-				size = 320
-			}
-			Heatmap("align", p.heat, size)
+			Heatmap("align", p.heat, 320)
 		}
 	}
 }
@@ -1252,7 +1250,20 @@ func (p *AlignPanel) hitTest(x, y float64) int {
 	return -1
 }
 
+// ClaimsDrag: the ROI / occlusion tools take every left drag, the select tool only over a ROI
+// (or while one is being moved); otherwise the viewer pans.
+func (p *AlignPanel) ClaimsDrag() bool {
+	switch p.tool {
+	case "roi", "occlusion":
+		return true
+	case "select":
+		return p.dragging || p.hoverRoi
+	}
+	return false
+}
+
 func (p *AlignPanel) Hover(x, y int) string {
+	p.hoverRoi = p.tool == "select" && p.template != nil && p.hitTest(float64(x)+0.5, float64(y)+0.5) >= 0
 	if isAlignedView(p.viewKind) {
 		return p.hoverAligned(x, y)
 	}

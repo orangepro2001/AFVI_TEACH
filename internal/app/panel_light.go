@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 func init() {
@@ -201,7 +200,6 @@ func (p *LightPanel) requestRender() {
 		}
 		return func() {
 			if a.Scene != scene || !p.active {
-				PutRGBA(pix)
 				return
 			}
 			a.Viewer.SetImage(scene.W, scene.H, pix)
@@ -296,28 +294,23 @@ func (p *LightPanel) DrawLeft() {
 	if Section(T("light.section.light"), "light-src") {
 		for i := range a.Light.Channels {
 			ch := &a.Light.Channels[i]
-			imgui.PushIDInt(int32(i))
-			if imgui.Checkbox("##en", &ch.Enable) {
+			id := fmt.Sprintf("light-ch%d", i)
+			if Check("", id+"-en", &ch.Enable) {
 				changed = true
 			}
-			imgui.SameLine()
+			SameLine()
 			name := lightColorNames[0]
 			if int(ch.Color) < len(lightColorNames) {
 				name = lightColorNames[ch.Color]
 			}
-			imgui.AlignTextToFramePadding()
-			imgui.TextUnformatted(name)
-			imgui.SameLineV(labelWidth(), -1)
-			imgui.SetNextItemWidth(-1)
-			v := int32(ch.Value)
-			if imgui.SliderIntV("##val", &v, 0, 1024, "%d", imgui.SliderFlagsAlwaysClamp) {
+			v := int(ch.Value)
+			if SliderInt(name, id+"-val", &v, 0, 1024) {
 				ch.Value = float64(v)
 				if v > 0 {
 					ch.Enable = true
 				}
 				changed = true
 			}
-			imgui.PopID()
 		}
 	}
 	if Section(T("light.section.channel"), "light-ch") {
@@ -336,28 +329,15 @@ func (p *LightPanel) DrawLeft() {
 		changed = SliderF64(T("light.texture"), "texture", &a.Light.TextureStrength, 0, 1, "%.2f") || changed
 	}
 	if Section(T("light.section.reflectance"), "light-refl") {
-		if imgui.BeginTableV("##refl", 4, imgui.TableFlagsSizingStretchProp, imgui.NewVec2(0, 0), 0) {
-			imgui.TableSetupColumnV(T("light.material"), 0, 1.2, 0)
-			for _, n := range []string{"R", "G", "B"} {
-				imgui.TableSetupColumnV(n, 0, 1, 0)
-			}
-			imgui.TableHeadersRow()
-			for m := 0; m < 4; m++ {
-				imgui.TableNextRow()
-				imgui.TableSetColumnIndex(0)
-				imgui.AlignTextToFramePadding()
-				imgui.TextUnformatted(core.MaterialNames[m])
-				for c := 0; c < 3; c++ {
-					imgui.TableSetColumnIndex(int32(c + 1))
-					imgui.SetNextItemWidth(-1)
-					v := float32(a.Light.Reflectance[m][c])
-					if imgui.DragFloatV(fmt.Sprintf("##r%d%d", m, c), &v, 0.005, 0, 2, "%.3f", imgui.SliderFlagsAlwaysClamp) {
-						a.Light.Reflectance[m][c] = float64(v)
-						changed = true
-					}
+		Text(T("light.material") + "    R / G / B")
+		for m := 0; m < 4; m++ {
+			Text(core.MaterialNames[m])
+			for c := 0; c < 3; c++ {
+				SameLine()
+				if ui.InputNum(fmt.Sprintf("refl-%d-%d", m, c), &a.Light.Reflectance[m][c], 0, 2, 0.005, "%.3f") {
+					changed = true
 				}
 			}
-			imgui.EndTable()
 		}
 		if Button(T("light.restore"), "refl-restore") {
 			a.Light.Reflectance = core.DefaultReflectance
@@ -394,7 +374,7 @@ func (p *LightPanel) DrawRight() {
 				T("light.col.max"), T("light.col.pixel"), T("light.col.satHigh"), T("light.col.satLow"),
 			}
 			stats := p.stats
-			DataTable("light-stats", headers, len(stats), float32(len(stats)+1)*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+			DataTable("light-stats", headers, len(stats), len(stats)+1, func(row, col int) string {
 				s := stats[row].stats
 				switch col {
 				case 0:
@@ -418,13 +398,13 @@ func (p *LightPanel) DrawRight() {
 			if a.Display != DisplayRGB {
 				highlight = int(math.Round(stats[0].stats.Mean))
 			}
-			Histogram("light", &stats[0].stats.Histogram, highlight, sc(130))
+			Histogram("light", &stats[0].stats.Histogram, highlight, 130)
 		}
 	}
 	if Section(T("light.section.material"), "light-material") {
 		s := a.Scene
 		headers := []string{T("light.col.material"), T("light.col.pixels"), T("light.col.mean")}
-		DataTable("light-material", headers, 4, 5*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+		DataTable("light-material", headers, 4, 5, func(row, col int) string {
 			switch col {
 			case 0:
 				return core.MaterialNames[row]
@@ -445,6 +425,9 @@ func (p *LightPanel) Overlay(o *Overlay) {
 		o.DashedRect(p.measure.X, p.measure.Y, p.measure.W, p.measure.H, OverlayWarn, 1.5)
 	}
 }
+
+// ClaimsDrag: left drags draw the measure box.
+func (p *LightPanel) ClaimsDrag() bool { return true }
 
 func (p *LightPanel) Pointer(ev PointerEvent) bool {
 	switch ev.Kind {

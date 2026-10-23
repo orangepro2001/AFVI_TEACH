@@ -44,7 +44,7 @@ if (-not (Test-Path -LiteralPath $windres)) {
     exit 1
 }
 $env:PATH = $mingwBin + ';' + $env:PATH
-$env:CGO_ENABLED = '1'
+$env:CGO_ENABLED = '0'
 $env:GOOS = 'windows'
 $env:GOARCH = 'amd64'
 
@@ -81,8 +81,8 @@ Invoke-Checked 'windres setup' { & $windres -O coff -o cmd\setup\rsrc_windows_am
 
 # --- 2. the programs ---------------------------------------------------------
 Write-Host '==> go build teach-imgui, camera-gui (static, windowsgui)'
-Invoke-Checked 'go build teach-imgui' { & go build -ldflags '-s -w -H windowsgui -extldflags=-static' -o (Join-Path $binDir 'teach-imgui.exe') ./cmd/teach-imgui }
-Invoke-Checked 'go build camera-gui' { & go build -ldflags '-s -w -H windowsgui -extldflags=-static' -o (Join-Path $binDir 'camera-gui.exe') ./cmd/camera-gui }
+Invoke-Checked 'go build teach-imgui' { & go build -tags production -ldflags '-s -w -H windowsgui' -o (Join-Path $binDir 'teach-imgui.exe') ./cmd/teach-imgui }
+Invoke-Checked 'go build camera-gui' { & go build -tags production -ldflags '-s -w -H windowsgui' -o (Join-Path $binDir 'camera-gui.exe') ./cmd/camera-gui }
 
 Write-Host '==> go build camera, setup stub (pure Go, no cgo)'
 $env:CGO_ENABLED = '0'

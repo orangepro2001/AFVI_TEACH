@@ -1,0 +1,86 @@
+/*
+ * win32-vue — design tokens
+ * Palette: Windows 2000 "classic" system colours.
+ * Every value below maps 1:1 onto a Win32 system colour (COLOR_*) or a
+ * classic 3D edge colour, so the theme stays authentic and easy to re-skin.
+ */
+
+:root {
+  /* ---- Surface / face ------------------------------------------------ */
+  --w-face: #d4d0c8;          /* COLOR_3DFACE  · ButtonFace           */
+  --w-face-alt: #ece9e2;      /* COLOR_3DFACE alt (Win2000 dialog)   */
+  --w-window: #ffffff;        /* COLOR_WINDOW · edit field background */
+  --w-window-text: #000000;   /* COLOR_WINDOWTEXT                     */
+
+  /* ---- 3D edge colours ---------------------------------------------- */
+  --w-hilight: #ffffff;       /* COLOR_BTNHILIGHT · outer top-left    */
+  --w-light: #dfdfdf;         /* COLOR_3DLIGHT   · inner top-left     */
+  --w-shadow: #808080;        /* COLOR_BTNSHADOW · inner bottom-right */
+  --w-dkshadow: #000000;      /* COLOR_3DDKSHADOW · outer bottom-right*/
+
+  /* ---- Caption ------------------------------------------------------- */
+  --w-title-a1: #0a246a;      /* COLOR_ACTIVECAPTION (dark end)      */
+  --w-title-a2: #a6caf0;      /* COLOR_ACTIVECAPTION (light end)     */
+  --w-title-i1: #808080;      /* COLOR_INACTIVECAPTION (dark end)    */
+  --w-title-i2: #c0c0c0;      /* COLOR_INACTIVECAPTION (light end)   */
+  --w-title-text: #ffffff;    /* COLOR_CAPTIONTEXT                   */
+  --w-title-text-inactive: #d4d0c8;
+
+  /* ---- Selection / highlight ---------------------------------------- */
+  --w-select-bg: #0a246a;     /* COLOR_HIGHLIGHT                     */
+  --w-select-text: #ffffff;   /* COLOR_HIGHLIGHTTEXT                 */
+  --w-disabled: #808080;      /* COLOR_GRAYTEXT                      */
+  --w-disabled-shadow: #ffffff;
+
+  /* ---- Misc system colours ------------------------------------------ */
+  --w-text: #000000;          /* COLOR_BTNTEXT                       */
+  --w-info-bg: #ffffe1;       /* COLOR_INFO · tooltip                */
+  --w-info-border: #000000;
+  --w-progress: #0a246a;      /* classic progress block navy         */
+  --w-grid: #ffffff;          /* list-view grid line                 */
+  --w-scroll-track: #d4d0c8;
+  --w-scroll-thumb: #d4d0c8;
+
+  /* ---- Accents (industrial) ------------------------------------------ */
+  --w-ok: #008000;
+  --w-warn: #e0a800;
+  --w-err: #c00000;
+  --w-info: #0060c0;
+  --w-neutral: #808080;
+
+  /* ---- Typography ---------------------------------------------------- */
+  --w-font-ui: Tahoma, "MS Sans Serif", "Microsoft Sans Serif", Geneva,
+    Verdana, "DejaVu Sans", "WenQuanYi Micro Hei", sans-serif;
+  --w-font-mono: "Consolas", "Lucida Console", "Courier New", "DejaVu Sans Mono",
+    monospace;
+  --w-font-size: 11px;
+  --w-font-size-sm: 10px;
+  --w-line-height: 1.35;
+
+  /* ---- Metrics (Win32 default heights) ------------------------------- */
+  --w-btn-h: 23px;
+  --w-btn-h-sm: 21px;
+  --w-field-h: 21px;
+  --w-row-h: 18px;
+  --w-title-h: 18px;
+  --w-menubar-h: 20px;
+  --w-status-h: 20px;
+  --w-toolbar-h: 26px;
+  --w-tab-h: 21px;
+  --w-icon: 16px;
+  --w-icon-lg: 24px;
+
+  /* ---- Spacing (tight, control-panel density) ------------------------ */
+  --w-gap: 4px;
+  --w-gap-lg: 8px;
+  --w-pad: 3px;
+
+  /* ---- Layers -------------------------------------------------------- */
+  --w-z-menu: 1000;
+  --w-z-dropdown: 1100;
+  --w-z-dialog: 1200;
+  --w-z-tooltip: 1300;
+
+  /* ---- Motion (Win32 is instant; keep it that way) ------------------- */
+  --w-dur: 60ms;
+}

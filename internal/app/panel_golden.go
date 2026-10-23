@@ -208,3 +208,6 @@ func (p *GoldenPanel) Hover(x, y int) string {
 	}
 	return T("golden.hover", "gv", strconv.Itoa(gv), "where", where)
 }
+
+// ClaimsDrag: the Add / Erase tools take left drags; the point tool leaves them to the viewer.
+func (p *GoldenPanel) ClaimsDrag() bool { return p.board() != nil && p.tool != goldenToolPoint }

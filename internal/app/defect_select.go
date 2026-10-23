@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 // selectionState 是缺陷面板的选择工具状态。
@@ -277,22 +276,19 @@ func (p *DefectPanel) handleSelectKeys() {
 	if p.paramsOpen {
 		return
 	}
-	if imgui.CurrentIO().WantTextInput() {
-		return
-	}
-	if imgui.IsKeyPressedBool(imgui.KeyEscape) {
+	if ui.KeyPressed("Escape") {
 		if p.sel.frame != nil && p.sel.frame.Busy() {
 			p.sel.frame.Reset()
 		} else {
 			p.clearSelection()
 		}
 	}
-	if imgui.IsKeyPressedBool(imgui.KeyBackspace) {
+	if ui.KeyPressed("Backspace") {
 		if p.sel.frame != nil {
 			p.sel.frame.Undo()
 		}
 	}
-	if imgui.IsKeyPressedBool(imgui.KeyDelete) {
+	if ui.KeyPressed("Delete") {
 		p.deleteSelected()
 	}
 }
@@ -335,191 +331,160 @@ func (p *DefectPanel) drawSelectionOverlay(o *Overlay) {
 	}
 }
 
-// drawSelectionEditor 绘制浮动选择编辑器。
+// drawSelectionEditor records the selection editor as an inline group box (the old floating
+// window cannot be a modal dialog: the selection tools work on the viewer behind it).
 func (p *DefectPanel) drawSelectionEditor() {
 	p.pruneSelection()
 	sel := p.selectedStrokes()
 	if len(sel) == 0 {
 		return
 	}
-	origin, size := p.a.Viewer.Canvas()
-	imgui.SetNextWindowPosV(imgui.NewVec2(origin.X+size.X-330-56, origin.Y+size.Y-372), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(320), sc(360)), imgui.CondFirstUseEver)
-	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings |
-		imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
-	open := imgui.BeginV("##defect-selection", nil, flags)
-	imgui.PopStyleVar()
-	if !open {
-		imgui.End()
-		return
-	}
-	wp, ws := imgui.WindowPos(), imgui.WindowSize()
-	dl := imgui.WindowDrawList()
-	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
-	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
-	Caption(dl, capMin, capMax, T("defect.sel.title"), true)
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
-	if ButtonSized("x", "sel-close", imgui.NewVec2(sc(16), sc(14)), true) {
-		p.clearSelection()
-		imgui.End()
-		return
-	}
-
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(10), wp.Y+sc(30)))
-	imgui.BeginChildStrV("##defect-selection-body", imgui.NewVec2(ws.X-sc(20), ws.Y-sc(40)), 0, 0)
-
-	Note(T("defect.sel.count", "n", fmt.Sprint(len(sel))))
-	if p.renderRev != p.renderedRev {
-		Note(T("defect.sel.stale"))
-	} else if p.mode == modeDetect {
-		found := 0
-		total := 0
-		for _, s := range sel {
-			if !p.strokeEnabled(s) {
-				continue
+	GroupBox(T("defect.sel.title"), "defect-selection", func() {
+		Note(T("defect.sel.count", "n", fmt.Sprint(len(sel))))
+		if p.renderRev != p.renderedRev {
+			Note(T("defect.sel.stale"))
+		} else if p.mode == modeDetect {
+			found := 0
+			total := 0
+			for _, s := range sel {
+				if !p.strokeEnabled(s) {
+					continue
+				}
+				total++
+				if p.strokeDetected(s) {
+					found++
+				}
 			}
-			total++
-			if p.strokeDetected(s) {
-				found++
-			}
+			Note(T("defect.sel.detected", "found", fmt.Sprint(found), "total", fmt.Sprint(total)))
 		}
-		Note(T("defect.sel.detected", "found", fmt.Sprint(found), "total", fmt.Sprint(total)))
-	}
 
-	if Button(T("defect.sel.hide"), "sel-hide") {
-		p.applyToSelection(func(s *core.DefectStroke) {
-			scaleAmplitude(s, 0.8)
-			if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
-				s.Radius = clampF(s.Radius*0.9, 0.5, 40)
-			}
-		})
-	}
-	imgui.SameLine()
-	if Button(T("defect.sel.clear"), "sel-clear") {
-		p.applyToSelection(func(s *core.DefectStroke) {
-			scaleAmplitude(s, 1.25)
-			if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
-				s.Radius = clampF(s.Radius*1.1, 0.5, 40)
-			}
-		})
-	}
-	imgui.SameLine()
-	if Button(T("defect.sel.delete"), "sel-delete") {
-		p.deleteSelected()
-		imgui.EndChild()
-		imgui.End()
-		return
-	}
-	imgui.SameLine()
-	if Button(T("defect.sel.deselect"), "sel-deselect") {
-		p.clearSelection()
-		imgui.EndChild()
-		imgui.End()
-		return
-	}
-
-	first := sel[0]
-	kind := int(first.Kind)
-	if Combo(T("defect.sel.kind"), "sel-kind", &kind, []string{
-		T("defect.kind.bright"), T("defect.kind.dark"),
-	}) {
-		k := core.DefectKind(kind)
-		p.applyToSelection(func(s *core.DefectStroke) { s.Kind = k })
-	}
-
-	amp := int(first.Amplitude)
-	if Combo(T("defect.sel.ampMode"), "sel-ampmode", &amp, []string{
-		T("defect.amplitude.absolute"), T("defect.amplitude.relative"), T("defect.amplitude.target"),
-	}) {
-		mode := core.DefectAmplitude(amp)
-		p.applyToSelection(func(s *core.DefectStroke) {
-			switch mode {
-			case core.AmpRelative:
-				if s.RelativePct == 0 {
-					s.RelativePct = 40
-				}
-			case core.AmpTarget:
-				s.HasTarget = true
-				if s.TargetGv == 0 {
-					if s.Kind == core.Bright {
-						s.TargetGv = 250
-					} else {
-						s.TargetGv = 10
-					}
-				}
-			default:
-				if s.DeltaGv == 0 {
-					s.DeltaGv = 60
-				}
-			}
-			s.Amplitude = mode
-		})
-	}
-
-	switch first.Amplitude {
-	case core.AmpRelative:
-		v := first.RelativePct
-		if SliderF64(T("defect.sel.value.pct"), "sel-value-pct", &v, 1, 300, "%.0f") {
-			p.applyToSelection(func(s *core.DefectStroke) { s.RelativePct = v })
-		}
-	case core.AmpTarget:
-		v := first.TargetGv
-		if SliderF64(T("defect.sel.value.target"), "sel-value-target", &v, 0, 255, "%.0f") {
+		if Button(T("defect.sel.hide"), "sel-hide") {
 			p.applyToSelection(func(s *core.DefectStroke) {
-				s.TargetGv = v
-				s.HasTarget = true
+				scaleAmplitude(s, 0.8)
+				if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
+					s.Radius = clampF(s.Radius*0.9, 0.5, 40)
+				}
 			})
 		}
-	default:
-		v := first.DeltaGv
-		if SliderF64(T("defect.sel.value.delta"), "sel-value-delta", &v, 1, 255, "%.0f") {
-			p.applyToSelection(func(s *core.DefectStroke) { s.DeltaGv = v })
+		SameLine()
+		if Button(T("defect.sel.clear"), "sel-clear") {
+			p.applyToSelection(func(s *core.DefectStroke) {
+				scaleAmplitude(s, 1.25)
+				if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
+					s.Radius = clampF(s.Radius*1.1, 0.5, 40)
+				}
+			})
 		}
-	}
+		SameLine()
+		if Button(T("defect.sel.delete"), "sel-delete") {
+			p.deleteSelected()
+			return
+		}
+		SameLine()
+		if Button(T("defect.sel.deselect"), "sel-deselect") {
+			p.clearSelection()
+			return
+		}
 
-	r := first.Radius
-	if SliderF64(T("defect.sel.radius"), "sel-radius", &r, 0.5, 40, "%.1f") {
-		p.applyToSelection(func(s *core.DefectStroke) {
-			if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
-				s.Radius = r
+		first := sel[0]
+		kind := int(first.Kind)
+		if Combo(T("defect.sel.kind"), "sel-kind", &kind, []string{
+			T("defect.kind.bright"), T("defect.kind.dark"),
+		}) {
+			k := core.DefectKind(kind)
+			p.applyToSelection(func(s *core.DefectStroke) { s.Kind = k })
+		}
+
+		amp := int(first.Amplitude)
+		if Combo(T("defect.sel.ampMode"), "sel-ampmode", &amp, []string{
+			T("defect.amplitude.absolute"), T("defect.amplitude.relative"), T("defect.amplitude.target"),
+		}) {
+			mode := core.DefectAmplitude(amp)
+			p.applyToSelection(func(s *core.DefectStroke) {
+				switch mode {
+				case core.AmpRelative:
+					if s.RelativePct == 0 {
+						s.RelativePct = 40
+					}
+				case core.AmpTarget:
+					s.HasTarget = true
+					if s.TargetGv == 0 {
+						if s.Kind == core.Bright {
+							s.TargetGv = 250
+						} else {
+							s.TargetGv = 10
+						}
+					}
+				default:
+					if s.DeltaGv == 0 {
+						s.DeltaGv = 60
+					}
+				}
+				s.Amplitude = mode
+			})
+		}
+
+		switch first.Amplitude {
+		case core.AmpRelative:
+			v := first.RelativePct
+			if SliderF64(T("defect.sel.value.pct"), "sel-value-pct", &v, 1, 300, "%.0f") {
+				p.applyToSelection(func(s *core.DefectStroke) { s.RelativePct = v })
 			}
-		})
-	}
-
-	soft := first.Softness
-	if SliderF64(T("defect.sel.softness"), "sel-softness", &soft, 0, 1, "%.2f") {
-		p.applyToSelection(func(s *core.DefectStroke) { s.Softness = soft })
-	}
-
-	grain := first.Grain
-	if SliderF64(T("defect.sel.grain"), "sel-grain", &grain, 0, 1, "%.2f") {
-		p.applyToSelection(func(s *core.DefectStroke) { s.Grain = grain })
-	}
-
-	prof := int(first.Profile)
-	if Combo(T("defect.sel.profile"), "sel-profile", &prof, []string{
-		T("defect.profile.linear"), T("defect.profile.gaussian"),
-	}) {
-		pr := core.DefectProfile(prof)
-		p.applyToSelection(func(s *core.DefectStroke) { s.Profile = pr })
-	}
-
-	enabled := p.strokeEnabled(first)
-	if Check(T("defect.sel.enabled"), "sel-enabled", &enabled) {
-		for i := range p.strokes {
-			s := p.strokes[i].gv
-			if s != nil && p.sel.set[s] {
-				p.strokes[i].enabled = enabled
+		case core.AmpTarget:
+			v := first.TargetGv
+			if SliderF64(T("defect.sel.value.target"), "sel-value-target", &v, 0, 255, "%.0f") {
+				p.applyToSelection(func(s *core.DefectStroke) {
+					s.TargetGv = v
+					s.HasTarget = true
+				})
+			}
+		default:
+			v := first.DeltaGv
+			if SliderF64(T("defect.sel.value.delta"), "sel-value-delta", &v, 1, 255, "%.0f") {
+				p.applyToSelection(func(s *core.DefectStroke) { s.DeltaGv = v })
 			}
 		}
-		p.renderRev++
-		p.requestRun()
-	}
 
-	imgui.EndChild()
-	imgui.End()
+		r := first.Radius
+		if SliderF64(T("defect.sel.radius"), "sel-radius", &r, 0.5, 40, "%.1f") {
+			p.applyToSelection(func(s *core.DefectStroke) {
+				if s.Shape == core.ShapeSpot || s.Shape == core.ShapeLine {
+					s.Radius = r
+				}
+			})
+		}
+
+		soft := first.Softness
+		if SliderF64(T("defect.sel.softness"), "sel-softness", &soft, 0, 1, "%.2f") {
+			p.applyToSelection(func(s *core.DefectStroke) { s.Softness = soft })
+		}
+
+		grain := first.Grain
+		if SliderF64(T("defect.sel.grain"), "sel-grain", &grain, 0, 1, "%.2f") {
+			p.applyToSelection(func(s *core.DefectStroke) { s.Grain = grain })
+		}
+
+		prof := int(first.Profile)
+		if Combo(T("defect.sel.profile"), "sel-profile", &prof, []string{
+			T("defect.profile.linear"), T("defect.profile.gaussian"),
+		}) {
+			pr := core.DefectProfile(prof)
+			p.applyToSelection(func(s *core.DefectStroke) { s.Profile = pr })
+		}
+
+		enabled := p.strokeEnabled(first)
+		if Check(T("defect.sel.enabled"), "sel-enabled", &enabled) {
+			for i := range p.strokes {
+				s := p.strokes[i].gv
+				if s != nil && p.sel.set[s] {
+					p.strokes[i].enabled = enabled
+				}
+			}
+			p.renderRev++
+			p.requestRun()
+		}
+
+	})
 }
 
 // strokeEnabled 返回笔画在 p.strokes 中的启用状态。

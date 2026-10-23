@@ -5,16 +5,14 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 // drawAdminLeft is the engineering column of the roi page.
 func (p *AlignFlowPanel) drawAdminLeft() {
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("tab.roi"))
-	imgui.Separator()
+	Text(T("tab.roi"))
+	ui.Separator()
 
 	if Section(T("roi.section.view"), "roi-view") {
 		sel := 0
@@ -41,12 +39,11 @@ func (p *AlignFlowPanel) drawAdminLeft() {
 			Note(T("roi.empty"))
 		} else {
 			for i, r := range rois {
-				imgui.PushIDInt(int32(i))
+				// A latching tool button stands in for the ImGui selectable row.
 				label := fmt.Sprintf("%s  x%.0f y%.0f w%.0f h%.0f", r.Name, r.X, r.Y, r.W, r.H)
-				if imgui.SelectableBoolV(label, i == p.editor.sel, 0, imgui.NewVec2(0, 0)) {
+				if ToolButton(label, fmt.Sprintf("roi-sel-%d", i), i == p.editor.sel) {
 					p.editor.sel = i
 				}
-				imgui.PopID()
 			}
 		}
 		if Button(T("roi.restore"), "roi-restore") {
@@ -101,8 +98,7 @@ func (p *AlignFlowPanel) drawAdminLeft() {
 		if dp != nil {
 			st = dp.AlignState()
 		}
-		imgui.AlignTextToFramePadding()
-		imgui.TextUnformatted(alignStateText(st))
+		Text(alignStateText(st))
 		if Button(T("roi.confirm"), "roi-confirm") {
 			p.confirm()
 		}
@@ -120,7 +116,7 @@ func (p *AlignFlowPanel) drawAdminLeft() {
 		}
 	}
 
-	if p.a.Viewer.Hovered() && imgui.IsKeyPressedBool(imgui.KeyDelete) {
+	if p.mouseOverPicture() && ui.KeyPressed("Delete") {
 		p.deleteSelected()
 	}
 }
@@ -213,9 +209,5 @@ func (p *AlignFlowPanel) drawAdminRight() {
 		}
 		return strconv.Itoa(col)
 	}
-	height := imgui.ContentRegionAvail().Y
-	if height < sc(120) {
-		height = sc(120)
-	}
-	DataTable("roi-matches", headers, len(matches), height, cell, -1)
+	DataTable("roi-matches", headers, len(matches), 8, cell, -1)
 }

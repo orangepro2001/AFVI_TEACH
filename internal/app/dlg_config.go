@@ -4,10 +4,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/config"
+	"afvi/teach-imgui/internal/ui"
 )
 
 // hostStat caches the result of CheckHostPath for one host of the selected machine.
@@ -20,7 +19,7 @@ type hostStat struct {
 // configDialog is the modal "Machine Configuration" dialog state. All edits happen on
 // draft; Cancel discards it.
 type configDialog struct {
-	needOpen bool
+	needOpen bool // the dialog is open (drawn every frame until closed)
 	draft    *config.Config
 	sel      int
 	stat     [3]hostStat // FM1, FM2, BM of the selected machine
@@ -72,36 +71,22 @@ func (d *configDialog) recheck(a *App) {
 	}
 }
 
-// statusText renders one host status line as (text, color).
-func statusText(st hostStat) (string, imgui.Vec4) {
-	p := CurrentPalette()
+// statusText renders one host status line as (text, tone).
+func statusText(st hostStat) (string, string) {
 	if !st.checked {
-		return "—", p.TextDim
+		return "—", "dim"
 	}
 	switch {
 	case st.err == nil:
-		return T("cfg.status.ok", "n", st.models), p.OK
+		return T("cfg.status.ok", "n", st.models), "good"
 	case st.err == ErrPathNotSet:
-		return T("cfg.status.notSet"), p.TextDim
+		return T("cfg.status.notSet"), "dim"
 	case st.err == ErrPathNotFound:
-		return T("cfg.status.notFound"), p.NG
+		return T("cfg.status.notFound"), "bad"
 	case st.err == ErrNoRepository:
-		return T("cfg.status.noRepo"), p.NG
+		return T("cfg.status.noRepo"), "bad"
 	}
-	return st.err.Error(), p.NG
-}
-
-// paintSelected repaints the just-drawn selectable row with the selection color and
-// white text, matching HotText's text origin.
-func paintSelected(label string) {
-	p := CurrentPalette()
-	min, max := imgui.ItemRectMin(), imgui.ItemRectMax()
-	dl := imgui.WindowDrawList()
-	FillRect(dl, min, max, p.Select)
-	pad := imgui.CurrentStyle().FramePadding().X
-	ts := imgui.CalcTextSize(label)
-	y := min.Y + (max.Y-min.Y-ts.Y)/2
-	dl.AddTextVec2(imgui.NewVec2(min.X+pad+2, y), p.SelectText, label)
+	return st.err.Error(), "bad"
 }
 
 // uniqueName returns a machine name from T("cfg.newName") with the smallest unused N.
@@ -132,27 +117,13 @@ func uniqueCopyName(c *config.Config, base string) string {
 	}
 }
 
-// drawConfigDialog draws the modal dialog; it is cheap when the popup is closed.
-func (a *App) drawConfigDialog() {
+// buildConfigDialog records the modal dialog while it is open; it is free when closed.
+func (a *App) buildConfigDialog() {
 	if a.role != access.RoleAdmin {
 		return
 	}
 	d := &a.cfgDlg
-	if d.needOpen {
-		imgui.OpenPopupStr("machine-config")
-		d.needOpen = false
-	}
-	vp := imgui.MainViewport()
-	center := imgui.NewVec2(vp.Pos().X+vp.Size().X/2, vp.Pos().Y+vp.Size().Y/2)
-	imgui.SetNextWindowPosV(center, imgui.CondAlways, imgui.NewVec2(0.5, 0.5))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(640), sc(430)), imgui.CondAlways)
-	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoResize | imgui.WindowFlagsNoMove |
-		imgui.WindowFlagsNoSavedSettings | imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
-	// 10 px right padding keeps the group boxes (full available width) off the window frame.
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
-	open := imgui.BeginPopupModalV("machine-config", nil, flags)
-	imgui.PopStyleVar()
-	if !open {
+	if !d.needOpen {
 		return
 	}
 	if d.draft == nil {
@@ -162,210 +133,121 @@ func (a *App) drawConfigDialog() {
 	if d.sel < 0 || d.sel >= len(d.draft.Machines) {
 		d.sel = 0
 	}
-
-	// Chrome: window frame + caption + close box.
-	wp, ws := imgui.WindowPos(), imgui.WindowSize()
-	dl := imgui.WindowDrawList()
-	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
-	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
-	Caption(dl, capMin, capMax, T("cfg.title"), true)
+	closeDlg := func() {
+		d.needOpen = false
+		d.draft = nil
+		d.errMsg = ""
+	}
 
 	cancel := false
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
-	if ButtonSized("x", "cfg-close", imgui.NewVec2(sc(16), sc(14)), true) {
-		cancel = true
-	}
-	if imgui.IsKeyPressedBool(imgui.KeyEscape) {
-		cancel = true
-	}
-
-	// Body.
-	bodyY, leftX, leftW, rightX, rightW := sc(32), sc(10), sc(176), sc(196), sc(434)
-
-	// Left column: machine list.
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, wp.Y+bodyY))
-	imgui.TextUnformatted(T("cfg.machines"))
-	listTop := imgui.CursorScreenPos().Y + imgui.TextLineHeight() + 4
-	listMin := imgui.NewVec2(wp.X+leftX, listTop)
-	listMax := imgui.NewVec2(wp.X+leftX+leftW, listTop+sc(230))
-	FillRect(dl, listMin, listMax, CurrentPalette().Field)
-	DrawEdge(dl, listMin, listMax, EdgeSunken)
-	imgui.SetCursorScreenPos(imgui.NewVec2(listMin.X+2, listMin.Y+2))
-	imgui.PushStyleColorVec4(imgui.ColChildBg, PaletteVec4(CurrentPalette().Field))
-	imgui.BeginChildStrV("##cfg-list", imgui.NewVec2(leftW-4, sc(226)), 0, 0)
-	for i := range d.draft.Machines {
-		name := d.draft.Machines[i].Name
-		if imgui.SelectableBoolV(name+"##m"+strconv.Itoa(i), i == d.sel, 0, imgui.NewVec2(0, 0)) && i != d.sel {
-			d.sel = i
-			d.recheck(a)
-		}
-		if i == d.sel {
-			paintSelected(name)
-		} else {
-			HotText(name, "")
-		}
-	}
-	imgui.EndChild()
-	imgui.PopStyleColor()
-
-	// Left column: [Add][Remove][Duplicate].
-	btnY := listMax.Y + 6
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
-	addLabel, remLabel, dupLabel := T("cfg.add"), T("cfg.remove"), T("cfg.duplicate")
-	addW, remW, dupW := ButtonWidth(addLabel), ButtonWidth(remLabel), ButtonWidth(dupLabel)
-	if addW < sc(52) {
-		addW = sc(52)
-	}
-	if remW < sc(52) {
-		remW = sc(52)
-	}
-	if dupW < sc(52) {
-		dupW = sc(52)
-	}
-	spacing := imgui.CurrentStyle().ItemSpacing().X
-	rowW := addW + remW + dupW + 2*spacing
-	// Two rows when the three buttons do not fit in the column.
-	if rowW > leftW {
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
-		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, imgui.FrameHeight()+2), true) {
-			d.draft.Machines = append(d.draft.Machines, config.Machine{Name: uniqueName(d.draft)})
-			d.sel = len(d.draft.Machines) - 1
-			d.recheck(a)
-		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY+imgui.FrameHeight()+6))
-		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, imgui.FrameHeight()+2), len(d.draft.Machines) > 1) {
-			d.draft.Machines = append(d.draft.Machines[:d.sel], d.draft.Machines[d.sel+1:]...)
-			if d.sel >= len(d.draft.Machines) {
+	if ui.Dialog(T("cfg.title"), "cfg", 640, func() {
+		// Machine list with Add / Remove / Duplicate.
+		GroupBox(T("cfg.machines"), "cfg-machines", func() {
+			if len(d.draft.Machines) > 0 {
+				names := make([]string, len(d.draft.Machines))
+				for i := range d.draft.Machines {
+					names[i] = d.draft.Machines[i].Name
+				}
+				clicked := DataTable("cfg-list", []string{T("cfg.machines")}, len(names), 6, func(row, col int) string {
+					return names[row]
+				}, d.sel)
+				if clicked >= 0 && clicked < len(names) && clicked != d.sel {
+					d.sel = clicked
+					d.recheck(a)
+				}
+			}
+			if Button(T("cfg.add"), "cfg-add") {
+				d.draft.Machines = append(d.draft.Machines, config.Machine{Name: uniqueName(d.draft)})
 				d.sel = len(d.draft.Machines) - 1
+				d.recheck(a)
 			}
-			d.recheck(a)
-		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+remW+spacing, btnY+imgui.FrameHeight()+6))
-		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, imgui.FrameHeight()+2), true) {
-			cp := d.draft.Machines[d.sel]
-			cp.Name = uniqueCopyName(d.draft, cp.Name)
-			d.draft.Machines = append(d.draft.Machines, cp)
-			d.sel = len(d.draft.Machines) - 1
-			d.recheck(a)
-		}
-	} else {
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, btnY))
-		if ButtonSized(addLabel, "cfg-add", imgui.NewVec2(addW, imgui.FrameHeight()+2), true) {
-			d.draft.Machines = append(d.draft.Machines, config.Machine{Name: uniqueName(d.draft)})
-			d.sel = len(d.draft.Machines) - 1
-			d.recheck(a)
-		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+addW+spacing, btnY))
-		if ButtonSized(remLabel, "cfg-remove", imgui.NewVec2(remW, imgui.FrameHeight()+2), len(d.draft.Machines) > 1) {
-			d.draft.Machines = append(d.draft.Machines[:d.sel], d.draft.Machines[d.sel+1:]...)
-			if d.sel >= len(d.draft.Machines) {
+			SameLine()
+			if ButtonOn(T("cfg.remove"), "cfg-remove", len(d.draft.Machines) > 1) {
+				d.draft.Machines = append(d.draft.Machines[:d.sel], d.draft.Machines[d.sel+1:]...)
+				if d.sel >= len(d.draft.Machines) {
+					d.sel = len(d.draft.Machines) - 1
+				}
+				d.recheck(a)
+			}
+			SameLine()
+			if ButtonOn(T("cfg.duplicate"), "cfg-duplicate", len(d.draft.Machines) > 0) {
+				cp := d.draft.Machines[d.sel]
+				cp.Name = uniqueCopyName(d.draft, cp.Name)
+				d.draft.Machines = append(d.draft.Machines, cp)
 				d.sel = len(d.draft.Machines) - 1
+				d.recheck(a)
 			}
-			d.recheck(a)
+		})
+		if len(d.draft.Machines) == 0 {
+			return
 		}
-		imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX+addW+remW+2*spacing, btnY))
-		if ButtonSized(dupLabel, "cfg-duplicate", imgui.NewVec2(dupW, imgui.FrameHeight()+2), true) {
-			cp := d.draft.Machines[d.sel]
-			cp.Name = uniqueCopyName(d.draft, cp.Name)
-			d.draft.Machines = append(d.draft.Machines, cp)
-			d.sel = len(d.draft.Machines) - 1
-			d.recheck(a)
-		}
-	}
 
-	// Right column.
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+rightX, wp.Y+bodyY))
-	imgui.PushItemWidth(rightW)
-	m := &d.draft.Machines[d.sel]
-	GroupBox(T("cfg.machine"), "cfg-machine", func() {
-		InputText(T("cfg.name"), "cfg-name", &m.Name, "")
-		InputText(T("cfg.address"), "cfg-addr", &m.Address, T("cfg.hintAddress"))
-	})
-	GroupBox(T("cfg.paths"), "cfg-paths", func() {
-		hostInput := func(label, id string, buf *string, idx int) {
-			if InputText(label, id, buf, T("cfg.hintPath")) {
-				d.stat[idx].checked = false
+		// Selected machine.
+		m := &d.draft.Machines[d.sel]
+		GroupBox(T("cfg.machine"), "cfg-machine", func() {
+			InputText(T("cfg.name"), "cfg-name", &m.Name, "")
+			InputText(T("cfg.address"), "cfg-addr", &m.Address, T("cfg.hintAddress"))
+		})
+		GroupBox(T("cfg.paths"), "cfg-paths", func() {
+			hostInput := func(label, id string, buf *string, idx int) {
+				if InputText(label, id, buf, T("cfg.hintPath")) {
+					d.stat[idx].checked = false
+				}
+				txt, tone := statusText(d.stat[idx])
+				ui.TextTone(txt, tone)
 			}
-			imgui.SetCursorPosX(imgui.CursorPosX() + labelWidth())
-			txt, col := statusText(d.stat[idx])
-			imgui.TextColored(col, txt)
-		}
-		hostInput(T("cfg.fm1"), "cfg-fm1", &m.FM1, 0)
-		hostInput(T("cfg.fm2"), "cfg-fm2", &m.FM2, 1)
-		hostInput(T("cfg.bm"), "cfg-bm", &m.BM, 2)
-		// [Check] at the bottom-right of the group.
-		checkLabel := T("cfg.check")
-		cw := ButtonWidth(checkLabel)
-		avail := imgui.ContentRegionAvail().X
-		if avail > cw {
-			imgui.SetCursorPosX(imgui.CursorPosX() + avail - cw)
-		}
-		if ButtonSized(checkLabel, "cfg-check", imgui.NewVec2(cw, imgui.FrameHeight()+2), true) {
-			d.recheck(a)
-		}
-	})
-	imgui.PopItemWidth()
+			hostInput(T("cfg.fm1"), "cfg-fm1", &m.FM1, 0)
+			hostInput(T("cfg.fm2"), "cfg-fm2", &m.FM2, 1)
+			hostInput(T("cfg.bm"), "cfg-bm", &m.BM, 2)
+			if Button(T("cfg.check"), "cfg-check") {
+				d.recheck(a)
+			}
+		})
 
-	// Bottom area.
-	bottomY := sc(430) - sc(62)
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+leftX, wp.Y+bottomY))
-	Note(T("cfg.file") + a.CfgPath)
-	verr := d.draft.Validate()
-	if verr != nil {
-		imgui.TextColored(CurrentPalette().NG, verr.Error())
-	} else if d.errMsg != "" {
-		imgui.TextColored(CurrentPalette().NG, d.errMsg)
-	}
+		Note(T("cfg.file") + a.CfgPath)
+		verr := d.draft.Validate()
+		if verr != nil {
+			ui.TextTone(verr.Error(), "bad")
+		} else if d.errMsg != "" {
+			ui.TextTone(d.errMsg, "bad")
+		}
 
-	okLabel, cancelLabel, applyLabel := T("cfg.ok"), T("cfg.cancel"), T("cfg.apply")
-	okW, cancelW, applyW := ButtonWidth(okLabel), ButtonWidth(cancelLabel), ButtonWidth(applyLabel)
-	if okW < sc(75) {
-		okW = sc(75)
-	}
-	if cancelW < sc(75) {
-		cancelW = sc(75)
-	}
-	if applyW < sc(75) {
-		applyW = sc(75)
-	}
-	btnRowW := okW + cancelW + applyW + 2*spacing
-	btnX := wp.X + ws.X - sc(10) - btnRowW
-	btnY2 := wp.Y + sc(430) - sc(30)
-	imgui.SetCursorScreenPos(imgui.NewVec2(btnX, btnY2))
-	enabled := verr == nil
-	if ButtonSized(okLabel, "cfg-ok", imgui.NewVec2(okW, imgui.FrameHeight()+2), enabled) {
-		d.draft.Active = d.draft.Machines[d.sel].Name
-		d.draft.Theme = a.theme
-		d.draft.Lang = string(CurrentLang())
-		if err := a.ApplyConfig(cloneConfig(d.draft)); err != nil {
-			d.errMsg = err.Error()
-		} else {
+		apply := func() bool {
+			d.draft.Active = d.draft.Machines[d.sel].Name
+			d.draft.Theme = a.theme
+			d.draft.Lang = string(CurrentLang())
+			if err := a.ApplyConfig(cloneConfig(d.draft)); err != nil {
+				d.errMsg = err.Error()
+				return false
+			}
 			a.SetHint(T("cfg.applied"))
-			imgui.CloseCurrentPopup()
+			return true
 		}
-	}
-	imgui.SetCursorScreenPos(imgui.NewVec2(btnX+okW+spacing, btnY2))
-	if ButtonSized(cancelLabel, "cfg-cancel", imgui.NewVec2(cancelW, imgui.FrameHeight()+2), true) {
+		enabled := verr == nil
+		if ui.ButtonEx(T("cfg.ok"), "cfg-ok", enabled, true) {
+			if apply() {
+				cancel = true
+			}
+		}
+		SameLine()
+		if Button(T("cfg.cancel"), "cfg-cancel") {
+			cancel = true
+		}
+		SameLine()
+		if ButtonOn(T("cfg.apply"), "cfg-apply", enabled) {
+			if apply() {
+				d.recheck(a)
+			}
+		}
+	}) {
 		cancel = true
 	}
-	imgui.SetCursorScreenPos(imgui.NewVec2(btnX+okW+cancelW+2*spacing, btnY2))
-	if ButtonSized(applyLabel, "cfg-apply", imgui.NewVec2(applyW, imgui.FrameHeight()+2), enabled) {
-		d.draft.Active = d.draft.Machines[d.sel].Name
-		d.draft.Theme = a.theme
-		d.draft.Lang = string(CurrentLang())
-		if err := a.ApplyConfig(cloneConfig(d.draft)); err != nil {
-			d.errMsg = err.Error()
-		} else {
-			a.SetHint(T("cfg.applied"))
-			d.recheck(a)
-		}
+	if ui.KeyPressed("Escape") {
+		cancel = true
 	}
-
 	if cancel {
-		imgui.CloseCurrentPopup()
+		closeDlg()
 	}
-	imgui.EndPopup()
 }
 
 func init() {

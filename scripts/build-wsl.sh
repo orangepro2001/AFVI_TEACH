@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # build-wsl.sh - One-click build from WSL2: checks, the three programs, and the installer.
 #
-#   ./scripts/build-wsl.sh [--offline] [--no-installer] [--version V] [--reference DIR] [--selftest] [--out DIR]
+#   ./scripts/build-wsl.sh [--offline] [--no-installer] [--version V] [--reference DIR] [--selftest]
 #                          [--commit MESSAGE] [--push] [--desktop] [--desktop-dir DIR] [--fetch]
 #
-# gofmt, go vet and the pure-Go tests, then bin/teach-imgui.exe, bin/camera-gui.exe and
+# frontend build, gofmt, go vet and all tests, then bin/teach-imgui.exe, bin/camera-gui.exe and
 # bin/camera.exe, then the installer dist/AFVI-Teach-Setup-<version>.exe (scripts/package-wsl.sh
 # --no-build packs the programs that were just built).
 #
@@ -22,7 +22,7 @@
 #   --fetch            wait for the build server's installer of the pushed commit (GitHub Release nightly,
 #                      up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 #
-# Requires: mingw-w64 (sudo apt-get install mingw-w64)
+# Requires: Go; node (frontend build, optional when frontend/dist is committed); mingw-w64 windres (icons, optional)
 
 set -euo pipefail
 
@@ -43,7 +43,7 @@ FETCH=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --selftest)
+        --selftest|--e2e)
             SELFTEST=true
             shift
             ;;
@@ -95,27 +95,40 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# --- Toolchain: MinGW-w64 cross-compiler -------------------------------------
-if ! command -v x86_64-w64-mingw32-gcc &> /dev/null; then
-    echo "ERROR: x86_64-w64-mingw32-gcc not found."
-    echo "Install with: sudo apt-get install mingw-w64"
-    exit 1
-fi
-
-export CGO_ENABLED=1
+# --- Toolchain ---------------------------------------------------------------
+# The programs are cgo-free now (Wails + WebView2 front end, no GLFW/OpenGL): plain Go
+# cross-compiles them. MinGW is only needed for windres (application icons, optional).
 export GOOS=windows
 export GOARCH=amd64
-export CC=x86_64-w64-mingw32-gcc
-export CXX=x86_64-w64-mingw32-g++
+export CGO_ENABLED=0
 
 if [ "$OFFLINE" = true ]; then
     export GOPROXY=off
     export GOFLAGS="-mod=readonly"
 fi
 
+# --- 0. front end (Vue 3 + win32-vue) ----------------------------------------
+# frontend/dist is embedded into the executables. Without node the committed build is used
+# (CI servers without node); with node it is type-checked, unit-tested and rebuilt.
+NODE_BIN=""
+if command -v node &> /dev/null; then
+    NODE_BIN=$(dirname "$(command -v node)")
+elif [ -x "$HOME/.local/node-v24.22.1-linux-x64/bin/node" ]; then
+    NODE_BIN="$HOME/.local/node-v24.22.1-linux-x64/bin"
+fi
+if [ -n "$NODE_BIN" ] && [ -d frontend/node_modules ]; then
+    echo "==> frontend (vue-tsc, vitest, vite build)"
+    (cd frontend && PATH="$NODE_BIN:$PATH" npx vue-tsc --noEmit && PATH="$NODE_BIN:$PATH" npx vitest run && PATH="$NODE_BIN:$PATH" npx vite build)
+elif [ -f frontend/dist/index.html ]; then
+    echo "WARNING: node or frontend/node_modules missing, using the committed frontend/dist"
+else
+    echo "ERROR: frontend/dist is missing and node is not available to build it"
+    exit 1
+fi
+
 # --- 1. gofmt ----------------------------------------------------------------
-echo "==> gofmt -l cmd internal"
-unformatted=$(gofmt -l cmd internal || true)
+echo "==> gofmt -l cmd internal frontend"
+unformatted=$(command gofmt -l cmd internal frontend || true)
 if [ -n "$unformatted" ]; then
     echo "The following files are not gofmt-clean:"
     echo "$unformatted"
@@ -123,13 +136,13 @@ if [ -n "$unformatted" ]; then
 fi
 
 # --- 2. go vet ---------------------------------------------------------------
-echo "==> go vet ./..."
+echo "==> go vet ./... (windows and linux)"
 go vet ./...
+GOOS=linux go vet ./...
 
-# --- 3. config, core and inspect tests (pure Go) -----------------------------
-echo "==> go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... ./internal/golden/..."
-# Run tests natively on Linux (config, core, inspect, model, snap, camera, link, appicon and installer are pure Go)
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/access/... ./internal/golden/...
+# --- 3. tests (everything is pure Go now, so it all runs natively on Linux) ---
+echo "==> go test ./..."
+GOOS=linux GOARCH=amd64 go test ./...
 
 # --- 3b. application icons (Windows resources) -------------------------------
 # The icon resource scripts need windres; without it the executables simply get the default icon.
@@ -142,54 +155,27 @@ else
 fi
 
 # --- 4. build ----------------------------------------------------------------
-# The GUIs link the MinGW runtime statically (-extldflags=-static): otherwise they import
-# libgcc_s_seh-1.dll and libstdc++-6.dll, which a Windows without MinGW does not have, and the
-# installer (scripts/package-wsl.sh) refuses such executables.
-echo "==> go build (cross-compile to Windows)"
+# No MinGW runtime to link statically any more: the executables import only system DLLs
+# (the installer, scripts/package-wsl.sh, still refuses lib*.dll imports). WebView2 (the
+# Edge runtime) must be present on the target Windows; Windows 11 has it.
 mkdir -p bin
-go build -ldflags "-s -w -H windowsgui -extldflags=-static" -o bin/teach-imgui.exe ./cmd/teach-imgui
+for prog in teach-imgui camera-gui; do
+    echo "==> go build $prog (cross-compile to Windows)"
+    go build -tags production -ldflags "-s -w -H windowsgui" -o "bin/$prog.exe" "./cmd/$prog"
+    if [ ! -f "bin/$prog.exe" ]; then
+        echo "ERROR: build failed, bin/$prog.exe not found"
+        exit 1
+    fi
+    echo "Built bin/$prog.exe ($(du -h "bin/$prog.exe" | cut -f1))"
+done
 
-exe="bin/teach-imgui.exe"
-if [ -f "$exe" ]; then
-    size_mb=$(du -h "$exe" | cut -f1)
-    echo "Built $exe ($size_mb)"
-else
-    echo "ERROR: build failed, $exe not found"
-    exit 1
-fi
+echo "==> go build camera (command line)"
+go build -ldflags "-s -w" -o bin/camera.exe ./cmd/camera
+echo "Built bin/camera.exe ($(du -h bin/camera.exe | cut -f1))"
 
-# --- 4b. camera-gui (studio, cgo like the teach program) ---------------------
-echo "==> go build camera-gui (cross-compile to Windows)"
-go build -ldflags "-s -w -H windowsgui -extldflags=-static" -o bin/camera-gui.exe ./cmd/camera-gui
-
-studio_exe="bin/camera-gui.exe"
-if [ -f "$studio_exe" ]; then
-    size_mb=$(du -h "$studio_exe" | cut -f1)
-    echo "Built $studio_exe ($size_mb)"
-else
-    echo "ERROR: build failed, $studio_exe not found"
-    exit 1
-fi
-
-# --- 4c. camera (pure Go, no cgo) --------------------------------------------
-echo "==> go build camera (pure Go, no cgo)"
-CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/camera.exe ./cmd/camera
-
-camera_exe="bin/camera.exe"
-if [ -f "$camera_exe" ]; then
-    size_mb=$(du -h "$camera_exe" | cut -f1)
-    echo "Built $camera_exe ($size_mb)"
-else
-    echo "ERROR: build failed, $camera_exe not found"
-    exit 1
-fi
-
-# --- 5. optional self-test ---------------------------------------------------
+# --- 5. UI end-to-end tests (Linux, headless Chrome against the programs' -web mode) ----
 if [ "$SELFTEST" = true ]; then
-    echo "WARNING: Self-test requires Windows environment"
-    echo "Transfer the executables to Windows and run:"
-    echo "  .\\bin\\teach-imgui.exe -selftest -out $OUT"
-    echo "  .\\bin\\camera-gui.exe -selftest -out $OUT"
+    ./scripts/e2e-wsl.sh
 fi
 
 # --- 5b. hand-over: commit and push -------------------------------------------

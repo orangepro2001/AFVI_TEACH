@@ -3,11 +3,10 @@ package app
 import (
 	"fmt"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/inspect"
+	"afvi/teach-imgui/internal/ui"
 )
 
 func init() {
@@ -173,26 +172,25 @@ func (p *OpInspectPanel) DrawLeft() {
 		Warn(T("opInspect.noPanel"))
 		return
 	}
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("opInspect.title"))
+	Text(T("opInspect.title"))
 
 	if dp.InspectBlocked() {
 		if g := p.a.goldenBoard(); g != nil && !g.Ready() && dp.AlignState() == alignDone {
 			Warn(T("opInspect.goldenBusy"))
-			if ButtonSized(T("opInspect.toGolden"), "op-togolden", imgui.NewVec2(ButtonWidth(T("opInspect.toGolden")), sc(44)), true) {
+			if ui.ButtonEx(T("opInspect.toGolden"), "op-togolden", true, true) {
 				p.a.ShowPage(goldenPageID)
 			}
 			return
 		}
 		if g := p.a.goldenBoard(); g.Empty() && dp.AlignState() == alignDone {
 			Warn(T("opInspect.goldenEmpty"))
-			if ButtonSized(T("opInspect.toGolden"), "op-togolden", imgui.NewVec2(ButtonWidth(T("opInspect.toGolden")), sc(44)), true) {
+			if ui.ButtonEx(T("opInspect.toGolden"), "op-togolden", true, true) {
 				p.a.ShowPage(goldenPageID)
 			}
 			return
 		}
 		Warn(T("opInspect.blocked"))
-		if ButtonSized(T("opInspect.toAlign"), "op-toalign", imgui.NewVec2(ButtonWidth(T("opInspect.toAlign")), sc(44)), true) {
+		if ui.ButtonEx(T("opInspect.toAlign"), "op-toalign", true, true) {
 			p.a.ShowPage("op-align")
 		}
 		return
@@ -203,7 +201,7 @@ func (p *OpInspectPanel) DrawLeft() {
 		chans := []core.CameraChannel{core.ChRed, core.ChGreen, core.ChBlue}
 		for i, label := range labels {
 			if i > 0 {
-				imgui.SameLine()
+				SameLine()
 			}
 			if ToolButton(label, fmt.Sprintf("op-ch-%d", i), dp.Channel() == chans[i]) {
 				dp.SetChannel(chans[i])
@@ -213,11 +211,7 @@ func (p *OpInspectPanel) DrawLeft() {
 	}
 
 	runLabel := T("opInspect.run")
-	runW := ButtonWidth(runLabel)
-	if runW < sc(160) {
-		runW = sc(160)
-	}
-	if ButtonSized(runLabel, "op-run", imgui.NewVec2(runW, sc(44)), true) {
+	if ui.ButtonEx(runLabel, "op-run", true, true) {
 		dp.RunInspect()
 		p.msg = ""
 	}
@@ -242,29 +236,13 @@ func (p *OpInspectPanel) DrawLeft() {
 	}
 }
 
-// drawVerdictBanner 画一条占满面板宽度的大号 OK/NG 结论横幅。
+// drawVerdictBanner draws the big OK/NG verdict badge across the panel width.
 func drawVerdictBanner(ok bool) {
-	text, bg := T("opInspect.ok"), CurrentPalette().OK
+	text, level := T("opInspect.ok"), "ok"
 	if !ok {
-		text, bg = T("opInspect.ng"), CurrentPalette().NG
+		text, level = T("opInspect.ng"), "ng"
 	}
-	p := imgui.CursorScreenPos()
-	w := imgui.ContentRegionAvail().X
-	h := sc(64)
-	dl := imgui.WindowDrawList()
-	dl.AddRectFilled(p, imgui.NewVec2(p.X+w, p.Y+h), rgba(int(bg.X*255+0.5), int(bg.Y*255+0.5), int(bg.Z*255+0.5), 255))
-	DrawEdge(dl, p, imgui.NewVec2(p.X+w, p.Y+h), EdgeSunken)
-	ts := imgui.CalcTextSize(text)
-	tx := p.X + (w-ts.X)/2
-	ty := p.Y + (h-ts.Y)/2
-	col := rgba(0, 0, 0, 255)
-	if !ok {
-		col = rgba(255, 255, 255, 255)
-	}
-	// 同一段文字画两遍，让横幅在不放大字体时也醒目。
-	dl.AddTextVec2(imgui.NewVec2(tx, ty), col, text)
-	dl.AddTextVec2(imgui.NewVec2(tx+1, ty), col, text)
-	imgui.Dummy(imgui.NewVec2(w, h))
+	ui.Badge(text, level).Prop("big", true)
 }
 
 func (p *OpInspectPanel) DrawRight() {
@@ -276,8 +254,7 @@ func (p *OpInspectPanel) DrawRight() {
 	if rep == nil {
 		return
 	}
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("opInspect.results"))
+	Text(T("opInspect.results"))
 	if len(rep.Defects) == 0 {
 		Note(T("opInspect.emptyList"))
 		return
@@ -288,7 +265,7 @@ func (p *OpInspectPanel) DrawRight() {
 		n = maxOpInspectRows
 	}
 	headers := []string{T("opInspect.col.mat"), T("opInspect.col.pol"), T("opInspect.col.area")}
-	clicked := DataTable("op-defects", headers, n, 12*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+	clicked := DataTable("op-defects", headers, n, maxOpInspectRows, func(row, col int) string {
 		d := defects[row]
 		switch col {
 		case 0:

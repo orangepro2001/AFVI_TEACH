@@ -2,7 +2,7 @@
 
 ## 简介
 
-本文档介绍 Color AFVI Master Teach 原生实现：Go + Dear ImGui（cimgui-go v1.6.1 / ImGui 1.93 WIP，GLFW + OpenGL3 后端），取代 teach-app 的 WebView2 外壳。同一个模块构建两个 GUI 程序——教学程序 **teach-imgui.exe**（操作员的对位与检测页；管理员登录后还有对位试验台与缺陷检出页）与相机合成工作室 **camera-gui.exe**（光照与 GV 页、缺陷合成页，camera.exe 的 GUI 前端，启动时锁定在管理员登录之后）——以及命令行相机程序 **camera.exe**。teach-app 与 teach-core 仍保留在仓库中，作为规格说明与对照实现。
+本文档介绍 Color AFVI Master Teach 原生实现：Go + Wails（WebView2）+ Vue 3（win32-vue 经典 Win32 皮肤，见 docs/WAILS_MIGRATION.md），界面外观与旧 ImGui 版一致。同一个模块构建两个 GUI 程序——教学程序 **teach-imgui.exe**（操作员的对位与检测页；管理员登录后还有对位试验台与缺陷检出页）与相机合成工作室 **camera-gui.exe**（光照与 GV 页、缺陷合成页，camera.exe 的 GUI 前端，启动时锁定在管理员登录之后）——以及命令行相机程序 **camera.exe**。teach-app 与 teach-core 仍保留在仓库中，作为规格说明与对照实现。
 
 界面采用经典 Win32（"Windows Classic"）外观：凸起按钮、凹陷输入框、蚀刻分组框等 3D 立体边框，灰色面板底色，深蓝渐变对话框标题栏，属性表风格页签，以及真正的菜单栏、工具栏和多窗格状态栏（含尺寸手柄）。默认主题为经典浅灰（`light`），深色主题（`dark`）沿用同一套立体边框方案，只是换成深灰配色。实现分布在 `internal/app/theme.go`（调色板与样式）、`internal/app/win32.go`（`DrawEdge`、`Caption`、`HotText` 等立体边框原语）、`internal/app/widgets.go`（自绘按钮、`GroupBox`、`TabStrip` 等控件）与 `internal/app/app.go`（菜单栏 / 工具栏 / 页签 / 状态栏布局）。
 
@@ -26,7 +26,7 @@
 .\scripts\build.ps1 -NoInstaller # 只构建程序，不生成安装包（-Version / -Reference 见 BUILD.md）
 ```
 
-首次编译约 3 分钟（cgo 包装层），之后增量编译约 2 秒。静态链接后 exe 约 10 MB，只依赖系统 DLL（含 Win10+ 自带的 UCRT）。模块缓存就绪后可用 `GOPROXY=off` 离线构建。构建输出为 `bin\teach-imgui.exe`。
+程序不再使用 cgo，编译很快；exe 约 15 MB，只依赖系统 DLL，运行需要 WebView2（Win11 自带，Win10 需安装 Edge WebView2 运行时）。模块缓存就绪后可用 `GOPROXY=off` 离线构建。构建输出为 `bin\teach-imgui.exe`。
 
 ## 运行参数
 
@@ -41,7 +41,7 @@
 | `-fontsize <10-28>` | 界面字号（像素，默认 16；布局常量按字号缩放） |
 | `-link <地址>` | 实时联机地址：工作室监听它，教学程序拨它；默认 `127.0.0.1:47631`；只写端口号等于 `127.0.0.1:<端口>`；`off` 关闭（见 [LINK.md](LINK.md)） |
 | `-login user:password` | 启动时登录（在第一个冒号处分割）：`admin:1` 进管理员界面，`operator:` 进操作员界面；工作室只接受管理员；无效时 stderr 报错、退出码 2（见 [ROLES.md](ROLES.md)） |
-| `-selftest` | 自测模式：遍历所有页签、主题与语言，保存截图与指标后退出 |
+| `-web ADDR` | 以 HTTP 提供界面（浏览器/测试模式，例如 `-web 127.0.0.1:47700`），不开窗口 |
 | `-out <目录>` | 自测输出目录 |
 | `-exitafter 12s` | 指定时长后自动关闭窗口 |
 
@@ -221,7 +221,6 @@ bin/camera -ref reference -model FM1/25fbo015-15 -dx 8 -dy -5 -rot 0.3 -tilt-x 0
 - `internal/app/defect_select.go`：缺陷选择工具与浮动选择编辑器
 - `internal/app/defect_product.go`：虚拟良品与默认不良
 - `internal/app/inspect_bridge.go`：把测试图与设计材质图交给检出的唯一桥接
-- `internal/app/selftest.go`：自测
 - `internal/app/capture_windows.go`：Windows 截图
 
 新增页面：实现 Panel 接口并在 `init()` 调用 `registerPanel`。
@@ -230,7 +229,7 @@ bin/camera -ref reference -model FM1/25fbo015-15 -dx 8 -dy -5 -rot 0.3 -tilt-x 0
 
 - `go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/...`：配置包 16 个测试 + 核心 73 个测试 + 检出 41 个测试 + 模型 9 个测试 + 抓拍格式 11 个测试 + 相机 20 个测试 + 联机 15 个测试 + 安装包 14 个测试（载荷往返与 StubSize、路径穿越与反斜杠拒绝、升级保留用户数据并删除过时文件、卸载只删记录的文件、占用文件时保留重试日志、日志篡改、PATH 编辑、三语文字与占位符、LANGID、只依赖标准库的隔离测试）（逐个移植 TS 单测 + RNG/颗粒哈希逐位对照 + 并行与串行一致；核心的 73 个 = 原有 59 个 + 6 个虚拟良品测试（确定性、关闭/零强度、统计、相关性、对渲染的影响、全尺寸运行时间）+ 5 个笔画几何测试 + 3 个默认小缺陷生成器测试；检出的 41 个 = 原有 21 个（其中 Size 测试改为连续像素数测试）+ 6 个连续像素测试 + 10 个局部背景测试（含逐材质开关）+ 4 个检出参数文件测试（逐像素与朴素中位数对照、半径 0 与朴素检出一致、不同材质不混合、平滑斜坡、双峰条纹下的散点、学习区间收紧、探查、参数校验、确定性）；检出测试覆盖区间、过检、Metal/SR 分离、区间过宽漏检、Size 连续像素数（含不取平均、空隙打断连续、斜向相邻）、MinArea、统计、连通块的暴力对照、连通标记、学习、参数校验、探查与隔离）。
 - 跨语言一致性（在 reference 25fbo015-15 上，Go 与 TS 各输出摘要后比对）：16 个检查段 0 差异；扭曲图（含弯曲、模糊、噪声、遮挡）与加噪缺陷测试图与 TS 逐字节相同；对齐结果与 Web 版一致（tx −0.59、ty −0.33、真值误差均值 0.532 px；这是最小重叠 = 1 即完整窗口的行为，默认的 0.9 只在 ROI 窗口伸出图像时与 Web 版不同）。检出算法是新的纯 Go 实现，不再与 TS 版本对照（旧的 golden-diff 检出代码已随该实现一起移除）。
-- `-selftest`：加载型号后依次走三页 × 深浅主题 × 三语截图，并注入合成鼠标输入断言：滚轮缩放 ×1.2、中键平移 (80, −40) px、拖框测量尺寸、对齐页新建 ROI 并重跑、缺陷页画亮块后重新渲染检出、探查得到结果，以及 Shift+左键放大 ×1.5 / Shift+右键缩小 ÷1.5、缺陷页椭圆与钢笔多边形创建、彩色不良在三个渲染通道下的亮度差异（红色不良只在 Red 通道变化等）；另断言五个检出步骤：良品学习（标记像素很少）、区间收紧后良品被标记（过检）、Size 变大后小连通块被滤除（缺陷数减少）而越界像素数不变（步骤 `inspect-size`）、区间过宽时画出的不良被漏检、重新学习后该不良又被检出；还断言悬浮工具面板的逐页能力与对齐页的工具映射、专注模式把画布加宽（测试窗口下 856 → 1584 像素）并能切回、点选 / Ctrl 加选 / 矩形框选、编辑选择会改变可检出性，以及虚拟良品（`product-variation` RMS ≥ 0.05、`product-off` 恢复原始纹理 RMS 0、`product-on`）、`defaults-detected`（10 个默认笔画很小、≥ 9 个被检出、额外缺陷 ≤ 6）、`edge-margin-off`（> 20 个缺陷）/ `edge-margin-on`（≤ 20 个），以及相机抓拍：`snap-camera`（抓拍图与进程内渲染逐字节相同、10 个默认笔画被检出）、`snap-stale`（编辑后报告过期）、`snap-resnap`（重新抓拍后不再过期且图像改变）、`snap-channel`（按需渲染绿色通道）、`snap-load`（读入抓拍并导入笔画）、`snap-off`（临时文件夹被删除；需要 `camera.exe` 与 `teach-imgui.exe` 放在一起，自测时限 300 s）；并断言局部背景：`bg-global-learn`（半径 0 时学习区间）、`bg-global-blobs`（金属上限 = 均值 + 22 时出现面积 ≥ 5000 的巨大缺陷）、`bg-local-learn`（半径 2 时学到的金属下限 ≥ 30，不再是盲的）、`bg-local-dots`（半径 2 时缺陷数 ≥ 20、最大面积 ≤ 400、标记像素不到全局区间的 1/10）；并截取检出参数窗口截图；教学程序自测显式给出 `-link` 且另一个进程里有空闲的工作室时多一个最后的 `live` 步骤（跟随工作室，断言收到的图与其发布的描述渲染出的图逐字节相同）；对齐与错位：教学程序的 `align-overlay`（默认叠加视图、叠加纹理红 = 模板 / 青 = 输入、未扭曲时判 OK 且与真值一致）、`align-offset`（严重错位：参数确实改变了输入图、测得的中心位移与设定相差 ≤ 1.5 个工作像素、判定与真值一致）、`align-lift`（翘起：参数到达图像、真值误差有限，并给出判定与真值的关系）与 `align-slight`（轻微错位：判 OK、与真值一致、测得位姿与设定相差 ≤ 0.8 个工作像素）、`align-border`（同一错位但最小重叠为 0 即旧行为：伸出图像最多的 ROI 被判外点，且逐 ROI 诊断里有它的说明）、`align-border-reset` 与 `align-reset`；模板图来源（在 `align-reset` 之后）：`align-template-image`（把叠加、错位等逐像素比较的步骤切回「与源图相同」的模板）、`align-design`（默认「设计假想图」：模板与 MEDIAN 逐像素不同、配准尝试窗口数 > 0、每个定位的机台 ROI 的 NCC < 0.95 且至少 4 个被定位、判定不为 NG）、`align-casual`（四个随机位置的 ROI：判定不为 OK 或至少一个未定位、平均 NCC < 0.9）、`align-casual-image`（同四个 ROI 用旧模板：判 OK、四个全部定位、平均 NCC > 0.95）与 `align-design-reset`（恢复到机台 ROI 与设计模板）；对齐后视图：`align-aligned`（按算法拟合出的变换而不是真值重采样、灰度差下降到三分之一以下、20 个核对窗口至少找到 8 个、局部残余不超过 OK 阈值的两倍）、`align-aligned-zoom`（缩放到最大残余窗口）与 `align-aligned-reset`；工作室的 `studio-warp`（带错位的抓拍：描述含 warp、`camera.exe` 的测试图与进程内渲染逐字节相同、与标称图不同、良品样本不动）与 `studio-warp-reset`；教学程序自测现为 60 步、工作室为 31 步；输出 `native-metrics.json` 与 19 张截图（原 13 张加 palette-light、palette-focus、defect-virtual、defect-edge-off、defect-snap、defect-snap-stale），另有 native-align-offset、native-align-lift、native-align-slight、native-align-aligned、native-align-aligned-zoom、native-align-border、native-align-design、native-align-casual、native-studio-warp。
+- 界面测试：`scripts/e2e-wsl.sh`（Playwright + Chrome 对真实程序的 `-web` 模式，数据取 `./reference`；另有录制帧用例）。`frontend` 下 `npx vitest run` 跑前端单测，`go test ./...` 跑全部 Go 测试。
 - 良品基线：加入边缘忽略后，自动学习后的 `inspect-good` 步骤在参考型号上测得 1 个缺陷 / 14 个越界像素（此前没有边缘忽略时约为 129 个缺陷 / 7119 个越界像素）。
 - 实测（16 线程、reference 25fbo015-15）：加载约 300 ms；光照渲染约 29 ms；GV 测量 15–25 ms；对齐（1/2 工作分辨率）约 150 ms；缺陷渲染 + 检出任务均值约 0.8 s、最大约 1.0 s（其中检出约 0.35 s）；UI 每帧 < 1 ms。
 

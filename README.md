@@ -1,10 +1,10 @@
 # AFVI Color Master Teach - 原生应用版本
 
-Go + Dear ImGui 原生实现的 AFVI 彩色检查机教学桌面软件。
+Go + Wails（WebView2）+ Vue 3 + win32-vue 实现的 AFVI 彩色检查机教学桌面软件。
 
 ## 项目概述
 
-本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言和 Dear ImGui 构建，取代了基于 WebView2 的方案。同一个模块构建两个 GUI 程序与一个命令行相机程序：
+本项目是 Color AFVI Master Teach 的原生 Windows 应用实现，使用 Go 语言、Wails 与 Vue 3（win32-vue 经典 Win32 皮肤）构建，界面外观与之前的 ImGui 版保持一致；程序不再依赖 cgo 与 MinGW 运行时（运行需要 Windows 自带的 WebView2）。同一个模块构建两个 GUI 程序与一个命令行相机程序：
 
 - **teach-imgui.exe**（教学程序）：默认以**操作员**身份启动，只显示引导式的「对位」「金板」与「检测」三页；在「文件 ▸ 管理员登录…」用内置账号登录后是原来的完整工程界面（对位、对位试验台、金板、缺陷检出页：相机通道、相机抓拍来源、F1 检出参数、学习区间、结果与探查）。两套界面都没有绘制工具、没有光照页，也从不画出模拟笔画轮廓（那是答案）。角色、页面与强制对位流程见 [docs/ROLES.md](docs/ROLES.md)。
 - **camera-gui.exe**（相机合成工作室，窗口标题 "Color AFVI Camera Studio"）：camera.exe 的 GUI 前端，把原始 MEDIAN 图像处理成合成抓拍；它是管理员工具，启动时锁定在登录窗口之后。包含「光照与 GV」页与「缺陷合成」页（渲染通道、虚拟良品、笔刷、画框工具、颜色、幅度、轮廓、随机不良、传感器噪声、测试图/标准图/差异图、选择面板与浮动编辑器、可见的笔画轮廓）；它从不运行检出，右侧「输出」栏把当前场景保存成抓拍。
@@ -84,7 +84,6 @@ x86_64-w64-mingw32-gcc --version
 .\bin\teach-imgui.exe -model FM1/25fbo015-15
 
 # 自测模式
-.\bin\teach-imgui.exe -selftest -out selftest-output
 ```
 
 界面采用经典 Win32（"Windows Classic"）外观：3D 立体边框、灰色面板、深蓝渐变对话框标题栏、属性表风格页签，以及菜单栏、工具栏和多窗格状态栏。默认主题为经典浅灰（`light`），深色主题（`dark`）沿用同一套立体边框方案。机台信息（名称、地址、FM1/FM2/BM 数据根目录）保存在 `afvi.toml` 中，可通过「文件 ▸ 机台配置…」或工具栏的 `…` 按钮编辑。
@@ -331,7 +330,6 @@ go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./inter
 
 ```bash
 # WSL2 构建后，传输到 Windows 运行
-.\bin\teach-imgui.exe -selftest -out selftest-output
 .\bin\camera-gui.exe -selftest -out selftest-output
 ```
 
@@ -346,8 +344,7 @@ go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./inter
 - 断言虚拟良品：`product-variation`（RMS ≥ 0.05）、`product-off`（恢复原始纹理，RMS 0）、`product-on`；`defaults-detected`（10 个默认笔画很小、≥ 9 个被检出、额外缺陷 ≤ 6）；`edge-margin-off`（> 20 个缺陷）/ `edge-margin-on`（≤ 20 个）
 - 断言相机抓拍：`snap-camera`（抓拍图与进程内渲染逐字节相同，10 个默认笔画被检出）、`snap-stale`（编辑后报告过期）、`snap-resnap`（重新抓拍后不再过期且图像改变）、`snap-channel`（按需渲染绿色通道）、`snap-load`（读入抓拍并导入笔画）、`snap-off`（临时文件夹被删除）；自测需要 `camera.exe` 与 `teach-imgui.exe` 放在一起，时限 300 s
 - 断言局部背景：bg-global-learn、bg-global-blobs（半径 0、金属上限 = 均值 + 22 时出现面积 ≥ 5000 的巨大缺陷）、bg-local-learn（学到的金属下限 ≥ 30，不再是盲的）、bg-local-dots（半径 2 时缺陷数 ≥ 20、最大面积 ≤ 400、标记像素不到全局区间的 1/10）
-- 实时联机（可选）：自测默认不联机；先让一个空闲的工作室在某个地址上运行（`.\bin\camera-gui.exe -link 127.0.0.1:47651`），再运行 `.\bin\teach-imgui.exe -selftest -link 127.0.0.1:47651 -out selftest-output`，教学程序多出最后一个 `live` 步骤：跟随另一个进程里的工作室，断言收到的图像与工作室发布的描述渲染出的图逐字节相同，且检出结果与直接检出该图一致
-- 截取检出参数窗口截图
+- 实时联机（可选）：自测默认不联机；先让一个空闲的工作室在某个地址上运行（`.\bin\camera-gui.exe -link 127.0.0.1:47651`），再运行 `- 截取检出参数窗口截图
 - 保存 19 张截图（原 13 张加 palette-light、palette-focus、defect-virtual、defect-edge-off、defect-snap、defect-snap-stale），共 51 个步骤
 - 输出性能指标（native-metrics.json）
 

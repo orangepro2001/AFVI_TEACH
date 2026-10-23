@@ -1,0 +1,98 @@
+/*
+ * win32-vue — 3D bevel primitives
+ *
+ * Win32 draws raised / sunken edges with a 2px two-tone border:
+ *   outer top-left  = hilight, outer bottom-right = dkshadow
+ *   inner top-left  = light,   inner bottom-right = shadow
+ * CSS box-shadow cannot express "two-tone" directly, so the 3D edge is
+ * simulated with four 1px inset shadows. The order matters: the first
+ * shadow in the list paints on top.
+ */
+
+/* ---- Raised: buttons, toolbar buttons, tab strip --------------------- */
+.w-bevel-raised {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-dkshadow),
+    inset 1px 1px 0 0 var(--w-hilight),
+    inset -2px -2px 0 0 var(--w-shadow),
+    inset 2px 2px 0 0 var(--w-light);
+}
+
+/* ---- Sunken: edit boxes, list boxes, status panes, tree view -------- */
+.w-bevel-sunken {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-hilight),
+    inset 1px 1px 0 0 var(--w-dkshadow),
+    inset -2px -2px 0 0 var(--w-light),
+    inset 2px 2px 0 0 var(--w-shadow);
+}
+
+/* ---- Sunken (thin): 1px-only variant, used by list-view headers ----- */
+.w-bevel-sunken-thin {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-hilight),
+    inset 1px 1px 0 0 var(--w-shadow);
+}
+
+/* ---- Raised (thin): 1px-only variant ------------------------------- */
+.w-bevel-raised-thin {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-shadow),
+    inset 1px 1px 0 0 var(--w-hilight);
+}
+
+/* ---- Window frame (dialog chrome): sunken inside a raised outer ----- */
+.w-bevel-window {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-hilight),
+    inset 1px 1px 0 0 var(--w-dkshadow),
+    inset -2px -2px 0 0 var(--w-light),
+    inset 2px 2px 0 0 var(--w-shadow),
+    inset -3px -3px 0 0 var(--w-dkshadow),
+    inset 3px 3px 0 0 var(--w-hilight);
+}
+
+/* ---- Thin separator (1px line, no bevel) ---------------------------- */
+.w-bevel-line-top {
+  border-top: 1px solid var(--w-shadow);
+}
+.w-bevel-line-bottom {
+  border-bottom: 1px solid var(--w-shadow);
+}
+.w-bevel-line-left {
+  border-left: 1px solid var(--w-shadow);
+}
+.w-bevel-line-right {
+  border-right: 1px solid var(--w-shadow);
+}
+
+/* ---- Groove (separator used by Win32 status bars / menus) ----------- */
+.w-bevel-groove-h {
+  border-top: 1px solid var(--w-shadow);
+  border-bottom: 1px solid var(--w-hilight);
+  height: 2px;
+}
+.w-bevel-groove-v {
+  border-left: 1px solid var(--w-shadow);
+  border-right: 1px solid var(--w-hilight);
+  width: 2px;
+}
+
+/* ---- Pressed / active state for raised controls --------------------- */
+.w-bevel-pressed {
+  box-shadow:
+    inset -1px -1px 0 0 var(--w-hilight),
+    inset 1px 1px 0 0 var(--w-dkshadow),
+    inset -2px -2px 0 0 var(--w-light),
+    inset 2px 2px 0 0 var(--w-shadow);
+}
+
+/* ---- Focus rectangle (Win32 draws a 1px dotted XOR rect) ------------ */
+.w-focus-rect:focus-visible {
+  outline: 1px dotted var(--w-text);
+  outline-offset: -4px;
+}
+.w-focus-rect-inset:focus-visible {
+  outline: 1px dotted var(--w-text);
+  outline-offset: -2px;
+}

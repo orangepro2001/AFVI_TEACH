@@ -21,7 +21,9 @@ afvi.toml
 
 # Build outputs
 bin/
-dist/
+/dist/
+frontend/node_modules
+frontend/test-results/
 
 # Generated Windows resource objects (scripts/build-wsl.sh and scripts/build.ps1 run windres)
 *.syso
@@ -43,3 +45,5 @@ snap-out/
 # OS
 .DS_Store
 Thumbs.db
+
+frontend/test-results/

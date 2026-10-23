@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`teach-imgui`: native Windows desktop apps (Go + Dear ImGui via `cimgui-go`, GLFW + OpenGL3) for teaching AFVI colour-inspection machines. Single Go module `afvi/teach-imgui` with two GUI programs plus a command-line camera simulator:
+`teach-imgui`: Windows desktop apps (Go + a Wails/WebView2 window rendering a Vue 3 front end with the win32-vue component library; no cgo) for teaching AFVI colour-inspection machines. Single Go module `afvi/teach-imgui` with two GUI programs plus a command-line camera simulator:
 
 - `cmd/teach-imgui` -> `bin/teach-imgui.exe`, the teaching program: starts as the **operator** (guided pages 对位 -> 金板 -> 检测), the previous interface is the **admin** interface behind `File > Admin login...` (`admin` / `1`, `Log out` returns to the operator): admin pages are `对位` (ROI stage), `对位试验台` (the old synthetic-warp align bench), `金板` (the golden board, shared with the operator) and defect detection (channel, camera snap source, F1 detection parameters, learn intervals, results, probe, and the UserMask section: regions that are not inspected). Alignment is forced (see `AlignFlow` below). No painting tools, no light tab, and it never draws the simulated stroke outlines (they are the answer).
 - `cmd/camera-gui` -> `bin/camera-gui.exe`, the camera studio (window title "Color AFVI Camera Studio"), an admin tool that starts locked behind the login: light & GV tab and defect-synthesis tab (render channel, virtual good unit, brush, frame tool, colour, amplitude, profile, random defects, sensor noise, view test/golden/diff, selection palette + floating editor, stroke outlines visible). It never runs the inspection; its Output column saves the current scenario by running `camera.exe`.
@@ -15,6 +15,19 @@ The two GUIs also talk to each other over a live link (`internal/link`, docs/LIN
 Docs in `README.md` and `docs/` are written in Chinese.
 
 Development happens on WSL2/Linux and the app is **cross-compiled to Windows**; it only runs on Windows (fonts are loaded from `C:\Windows\Fonts`, screenshots use Win32 APIs).
+
+## UI stack (read this first: it supersedes the Dear ImGui wording further down)
+
+The UI was migrated from Dear ImGui (cimgui-go, GLFW, OpenGL) to **Wails + Vue 3 + win32-vue** (docs/WAILS_MIGRATION.md). Panels keep their state and logic in Go (`internal/app`, now cgo-free), but instead of drawing they **record a frame tree**:
+
+- `internal/ui`: standard library only. `Builder` records controls (`ui.Button`, `ui.SliderF64`, `ui.Section`, `ui.GroupBox`, `ui.DataTable`, `ui.Dialog`, ...); widgets keep the immediate-mode shape (`if Button(...) {}` / `Slider(&v)` returns "changed") and consume the user's commands (`Cmd{id, op, v}`) from the previous round. `Viewer` holds the image and the overlay shapes (`Overlay.Rect/Line/Circle/...` in image coordinates, colours still 0xAABBGGRR); the front end owns zoom/pan and reports them back. `internal/app/widgets.go` keeps the old widget names as thin wrappers.
+- `internal/host`: runs the program on one goroutine (`Program.Build(b)` every 33 ms or on a command) and serves HTTP: `POST /cmd`, long-poll `GET /poll?seq=`, raw pixels `GET /img`. The same handler serves the Wails window (`AssetServer.Handler`) and `-web 127.0.0.1:PORT` (browser/test mode, any OS).
+- `frontend/` (Vue 3 + TS, vite): `render/NodeView.vue` maps node kinds to win32-vue components, `render/Viewer.vue` is the canvas viewer (wheel 1.2x, Shift+click zoom, middle/right pan, `claim` = left drags go to the panel), `render/kinds/<Kind>.vue` adds node kinds without touching the generic renderer, `App.vue` is the shell (title bar, menu, tabs, columns, status bar, dialogs). win32-vue is vendored in `frontend/vendor/win32-vue` (source `../win32-theme-for-wails`, commit in SOURCE_COMMIT). `frontend/dist` is committed and embedded by `frontend/embed.go`, so servers without node still build.
+- Panels implement `ClaimsDrag() bool` (read every frame; mirror the old "Pointer returned true on PointerDown"), `DialogPanel.DrawDialogs()` records `ui.Dialog`s, modal windows are state flags on the panel, keys are `ui.KeyPressed("F5")`.
+- Tests: all Go tests are pure Go and run natively (`go test ./...`, including `internal/app`); `frontend`: `npx vitest run` and Playwright (`scripts/e2e-wsl.sh`: Chrome against the real programs in `-web` mode on `./reference`, plus recorded-frame specs). The old `-selftest` is gone. The Windows window itself (WebView2) has not been exercised on a real Windows from this Linux box: smoke-test `bin\teach-imgui.exe` and `bin\camera-gui.exe` after installing.
+- Build: `scripts/build-wsl.sh` (frontend vue-tsc + vitest + vite build when node and `frontend/node_modules` exist, gofmt, vet, tests, `CGO_ENABLED=0 go build -tags production -H windowsgui`, installer). No MinGW runtime to link; windres is still used for icons (`3 ICON` is the Wails window icon). WebView2 runtime must exist on the target Windows (built into Windows 11).
+- Flags: as before, minus `-selftest/-out`, plus `-web ADDR`.
+- Not part of the migration: `cmd/camera`, installer logic, all algorithm packages.
 
 ## Commands
 

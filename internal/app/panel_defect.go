@@ -6,11 +6,10 @@ import (
 	"path/filepath"
 	"reflect"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/inspect"
 	snapfmt "afvi/teach-imgui/internal/snap"
+	"afvi/teach-imgui/internal/ui"
 )
 
 func init() {
@@ -512,7 +511,7 @@ type strokeEntry struct {
 	auto    bool // default tiny defect added on model load
 }
 
-// DefectPanel 移植 teach-app/src/defect-panel.ts 为原生 ImGui 面板。
+// DefectPanel 移植 teach-app/src/defect-panel.ts 为面板（帧树 UI）。
 type DefectPanel struct {
 	a    *App
 	mode defectMode
@@ -1081,17 +1080,14 @@ func (p *DefectPanel) requestRun() {
 		w, h := test.Width, test.Height
 		return func() {
 			if a.Scene != scene {
-				PutRGBA(pix)
 				return
 			}
 			if p.user.img != userImg {
-				PutRGBA(pix)
 				return
 			}
 			if liveOn && (!p.snapSrc.live || p.snapSrc.liveSess != liveSess || p.snapSrc.liveRev != liveRev) {
 				// The studio moved on (or the user left the live source) while this was running;
 				// the run for the newer revision is already queued.
-				PutRGBA(pix)
 				return
 			}
 			p.raw = raw
@@ -1147,14 +1143,11 @@ func (p *DefectPanel) requestRun() {
 			}
 			p.tintShown = key
 			if p.viewKind != viewKind || p.focusTintKey() != p.tintShown {
-				PutRGBA(pix)
 				p.requestView()
 				return
 			}
 			if p.active {
 				a.Viewer.SetImage(w, h, pix)
-			} else {
-				PutRGBA(pix)
 			}
 		}
 	})
@@ -1194,21 +1187,17 @@ func (p *DefectPanel) requestRender() {
 		w, h := golden.Width, golden.Height
 		return func() {
 			if a.Scene != scene {
-				PutRGBA(pix)
 				return
 			}
 			p.golden = golden
 			p.test = test
 			p.renderedRev = rev
 			if p.viewKind != viewKind {
-				PutRGBA(pix)
 				p.requestView()
 				return
 			}
 			if p.active {
 				a.Viewer.SetImage(w, h, pix)
-			} else {
-				PutRGBA(pix)
 			}
 		}
 	})
@@ -1247,7 +1236,6 @@ func (p *DefectPanel) requestView() {
 		w, h := test.Width, test.Height
 		return func() {
 			if a.Scene != scene || p.test != test {
-				PutRGBA(pix)
 				return
 			}
 			key := tintKey{on: tint.on(), target: focusTarget}
@@ -1256,14 +1244,11 @@ func (p *DefectPanel) requestView() {
 			}
 			p.tintShown = key
 			if p.viewKind != viewKind || p.focusTintKey() != p.tintShown {
-				PutRGBA(pix)
 				p.requestView()
 				return
 			}
 			if p.active {
 				a.Viewer.SetImage(w, h, pix)
-			} else {
-				PutRGBA(pix)
 			}
 		}
 	})
@@ -1596,7 +1581,7 @@ func (p *DefectPanel) placeFrame(res FrameResult) {
 
 // handleKeys processes frame-tool keyboard shortcuts (Esc cancels, Backspace undoes).
 func (p *DefectPanel) handleKeys() {
-	if p.mode == modeDetect && imgui.IsKeyPressedBoolV(imgui.KeyF5, false) && !imgui.IsPopupOpenStrV("", imgui.PopupFlagsAnyPopupId) {
+	if p.mode == modeDetect && ui.KeyPressed("F5") {
 		p.requestInspect()
 	}
 	if p.paramsOpen {
@@ -1604,11 +1589,11 @@ func (p *DefectPanel) handleKeys() {
 		return
 	}
 	if p.um.active {
-		if imgui.IsKeyPressedBool(imgui.KeyEscape) {
+		if ui.KeyPressed("Escape") {
 			p.userMaskStop()
 			p.a.SetHint("")
 		}
-		if imgui.IsKeyPressedBool(imgui.KeyBackspace) && !imgui.CurrentIO().WantTextInput() {
+		if ui.KeyPressed("Backspace") {
 			p.um.frame.Undo()
 		}
 		return
@@ -1616,7 +1601,7 @@ func (p *DefectPanel) handleKeys() {
 	if p.tool != toolFrame || p.frame == nil {
 		return
 	}
-	if imgui.IsKeyPressedBool(imgui.KeyEscape) {
+	if ui.KeyPressed("Escape") {
 		p.frame.Reset()
 		p.tool = toolNone
 		if p.a != nil && p.a.Viewer != nil {
@@ -1624,7 +1609,7 @@ func (p *DefectPanel) handleKeys() {
 		}
 		p.a.SetHint("")
 	}
-	if imgui.IsKeyPressedBool(imgui.KeyBackspace) {
+	if ui.KeyPressed("Backspace") {
 		p.frame.Undo()
 	}
 }
@@ -1743,12 +1728,11 @@ func (p *DefectPanel) DrawLeft() {
 			del := -1
 			for i := range p.strokes {
 				e := &p.strokes[i]
-				imgui.PushIDInt(int32(i))
-				if imgui.Checkbox("##en", &e.enabled) {
+				if Check("", fmt.Sprintf("defect-stroke-en-%d", i), &e.enabled) {
 					p.renderRev++
 					changed = true
 				}
-				imgui.SameLine()
+				SameLine()
 				label := ""
 				if e.gv != nil {
 					label = p.strokeLabel(e.gv)
@@ -1762,13 +1746,11 @@ func (p *DefectPanel) DrawLeft() {
 				if e.gv != nil && p.sel.set[e.gv] {
 					label = "● " + label
 				}
-				imgui.AlignTextToFramePadding()
-				imgui.TextUnformatted(label)
-				imgui.SameLine()
-				if Button(T("defect.brush.delete"), "defect-del") {
+				Text(label)
+				SameLine()
+				if Button(T("defect.brush.delete"), fmt.Sprintf("defect-del-%d", i)) {
 					del = i
 				}
-				imgui.PopID()
 			}
 			if del >= 0 {
 				p.strokes = append(p.strokes[:del], p.strokes[del+1:]...)
@@ -1783,7 +1765,7 @@ func (p *DefectPanel) DrawLeft() {
 				changed = true
 			}
 		}
-		imgui.SameLine()
+		SameLine()
 		if Button(T("defect.brush.clear"), "defect-clear") {
 			p.strokes = nil
 			p.renderRev++
@@ -1848,14 +1830,8 @@ func (p *DefectPanel) DrawLeft() {
 					p.color = preset.col
 				}
 			}
-			// Colour swatch with a sunken edge.
-			sw := imgui.NewVec2(sc(56), imgui.FrameHeight())
-			pos := imgui.CursorScreenPos()
-			imgui.Dummy(sw)
-			dl := imgui.WindowDrawList()
-			FillRect(dl, pos, imgui.NewVec2(pos.X+sw.X, pos.Y+sw.Y),
-				rgba(int(p.color[0]*255+0.5), int(p.color[1]*255+0.5), int(p.color[2]*255+0.5), 255))
-			DrawEdge(dl, pos, imgui.NewVec2(pos.X+sw.X, pos.Y+sw.Y), EdgeSunken)
+			// Colour swatch (the front end draws the sunken edge).
+			Swatch(rgba(int(p.color[0]*255+0.5), int(p.color[1]*255+0.5), int(p.color[2]*255+0.5), 255))
 			Note(T("defect.color.weights", "r", F(p.color[0], 2), "g", F(p.color[1], 2), "b", F(p.color[2], 2)))
 		}
 		Note(T("defect.color.note"))
@@ -2006,53 +1982,39 @@ func (p *DefectPanel) DrawLeft() {
 	}
 }
 
-// DrawDialogs draws the floating window of the mode: the selection editor in the
-// studio (author mode) and the detection-parameter window (F1 toggles it) in the
-// teaching program (detect mode).
+// DrawDialogs draws the detection-parameter window (F1 toggles it) in the teaching
+// program (detect mode). The studio's selection editor is an inline box in DrawRight
+// (a modal dialog would block the viewer that the selection tools work on).
 func (p *DefectPanel) DrawDialogs() {
 	if p.mode == modeAuthor {
-		p.drawSelectionEditor()
 		return
 	}
 	p.drawParamsDialog()
 }
 
-// drawParamsDialog draws the floating detection-parameter window (F1 toggles it).
+// drawParamsDialog draws the detection-parameter window (F1 toggles it).
 func (p *DefectPanel) drawParamsDialog() {
-	if imgui.IsKeyPressedBoolV(imgui.KeyF1, false) && !imgui.IsPopupOpenStrV("", imgui.PopupFlagsAnyPopupId) {
+	if ui.KeyPressed("F1") {
 		p.paramsOpen = !p.paramsOpen
-	}
-	if p.paramsOpen && imgui.IsKeyPressedBool(imgui.KeyEscape) {
-		p.paramsOpen = false
 	}
 	if !p.paramsOpen {
 		return
 	}
-	vp := imgui.MainViewport()
-	imgui.SetNextWindowPosV(imgui.NewVec2(vp.Pos().X+356, vp.Pos().Y+120), imgui.CondFirstUseEver, imgui.NewVec2(0, 0))
-	imgui.SetNextWindowSizeV(imgui.NewVec2(sc(480), sc(640)), imgui.CondFirstUseEver)
-	flags := imgui.WindowFlagsNoTitleBar | imgui.WindowFlagsNoCollapse | imgui.WindowFlagsNoSavedSettings |
-		imgui.WindowFlagsNoScrollbar | imgui.WindowFlagsNoScrollWithMouse
-	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(10, 0))
-	open := imgui.BeginV("##defect-params", nil, flags)
-	imgui.PopStyleVar()
-	if !open {
-		imgui.End()
-		return
-	}
-	wp, ws := imgui.WindowPos(), imgui.WindowSize()
-	dl := imgui.WindowDrawList()
-	DrawEdge(dl, wp, imgui.NewVec2(wp.X+ws.X, wp.Y+ws.Y), EdgeWindow)
-	capMin := imgui.NewVec2(wp.X+3, wp.Y+3)
-	capMax := imgui.NewVec2(wp.X+ws.X-3, wp.Y+3+sc(20))
-	Caption(dl, capMin, capMax, T("defect.params.title"), true)
-	imgui.SetCursorScreenPos(imgui.NewVec2(capMax.X-sc(18), capMin.Y+3))
-	if ButtonSized("x", "defect-params-close", imgui.NewVec2(sc(16), sc(14)), true) {
+	rerun := false
+	closed := ui.Dialog(T("defect.params.title"), "defect-params", 520, func() {
+		rerun = p.drawParamsBody()
+	})
+	if closed || ui.KeyPressed("Escape") {
 		p.paramsOpen = false
 	}
+	if rerun {
+		p.requestRun()
+	}
+}
 
-	imgui.SetCursorScreenPos(imgui.NewVec2(wp.X+sc(10), wp.Y+sc(30)))
-	imgui.BeginChildStrV("##defect-params-body", imgui.NewVec2(ws.X-sc(20), ws.Y-sc(40)), 0, 0)
+// drawParamsBody records the contents of the detection-parameter window and reports
+// whether the inspection has to run again.
+func (p *DefectPanel) drawParamsBody() bool {
 	rerun := false
 	ch := int(p.channel)
 	params := &p.inspectParams[ch]
@@ -2064,7 +2026,7 @@ func (p *DefectPanel) drawParamsDialog() {
 		p.requestRelearn()
 		rerun = true
 	}
-	imgui.SameLine()
+	SameLine()
 	if Button(T("defect.insp.reset"), "insp-reset") {
 		p.resetInspect()
 		rerun = true
@@ -2073,7 +2035,7 @@ func (p *DefectPanel) drawParamsDialog() {
 	if Button(T("defect.insp.saveFile"), "insp-save") {
 		p.saveParamsFile()
 	}
-	imgui.SameLine()
+	SameLine()
 	if Button(T("defect.insp.loadFile"), "insp-load") && p.loadParamsFile() {
 		rerun = true
 	}
@@ -2175,15 +2137,12 @@ func (p *DefectPanel) drawParamsDialog() {
 			}
 		}
 	}
-	imgui.EndChild()
-	if rerun {
-		p.requestRun()
-	}
-	imgui.End()
+	return rerun
 }
 
 func (p *DefectPanel) DrawRight() {
 	if p.mode == modeAuthor {
+		p.drawSelectionEditor()
 		p.drawOutputPanel()
 		return
 	}
@@ -2215,7 +2174,7 @@ func (p *DefectPanel) DrawRight() {
 					selM = i
 				}
 			}
-			mClicked := DataTable("defect-mstats", mHeaders, len(mOrder), 5*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+			mClicked := DataTable("defect-mstats", mHeaders, len(mOrder), 5, func(row, col int) string {
 				m := mOrder[row]
 				ms := r.PerMaterial[m]
 				mp := params.Materials[m]
@@ -2265,7 +2224,7 @@ func (p *DefectPanel) DrawRight() {
 				if n > maxResultRows {
 					n = maxResultRows
 				}
-				clicked := DataTable("defect-blobs", headers, n, 12*imgui.FrameHeightWithSpacing()+8, func(row, col int) string {
+				clicked := DataTable("defect-blobs", headers, n, 12, func(row, col int) string {
 					d := defects[idx[row]]
 					switch col {
 					case 0:
@@ -2375,8 +2334,7 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 			}
 			o.Rect(float64(d.BBox.X), float64(d.BBox.Y), float64(d.BBox.W), float64(d.BBox.H), col, 2)
 			boxes++
-			a, bb := o.ToScreen(float64(d.BBox.X), float64(d.BBox.Y)), o.ToScreen(float64(d.BBox.X+d.BBox.W), float64(d.BBox.Y+d.BBox.H))
-			if bb.X-a.X >= 24 && labels < maxOverlayLabels {
+			if float64(d.BBox.W)*float64(o.Scale()) >= 24 && labels < maxOverlayLabels {
 				o.Text(float64(d.BBox.X), float64(d.BBox.Y), 2, -2, col, fmt.Sprintf("%s %d", d.Material.String(), d.Area))
 				labels++
 			}
@@ -2434,6 +2392,31 @@ func (p *DefectPanel) Overlay(o *Overlay) {
 		mx, my, _ := p.a.Viewer.Mouse()
 		p.frame.Draw(o, mx, my, OverlayROI)
 	}
+}
+
+// ClaimsDrag reports whether a left drag on the viewer belongs to the active tool (the
+// front end then does not pan). It mirrors the ownership decisions of Pointer.
+func (p *DefectPanel) ClaimsDrag() bool {
+	if p.mode == modeDetect && p.um.active {
+		return p.um.frame != nil && p.userBoard() != nil && p.userMaskDrawable()
+	}
+	if p.mode == modeAuthor && p.warped() {
+		return false
+	}
+	if p.tool == toolFrame && p.frame != nil {
+		return true
+	}
+	if p.tool == toolNone {
+		if p.mode == modeDetect {
+			return false
+		}
+		switch p.sel.tool {
+		case PaletteRect, PaletteEllipse, PalettePolygon:
+			return p.sel.frame != nil
+		}
+		return false
+	}
+	return true
 }
 
 func (p *DefectPanel) Pointer(ev PointerEvent) bool {

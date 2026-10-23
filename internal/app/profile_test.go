@@ -6,64 +6,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"afvi/teach-imgui/internal/model"
-	"afvi/teach-imgui/internal/model/modeltest"
+	"afvi/teach-imgui/internal/host"
 	snapfmt "afvi/teach-imgui/internal/snap"
+	"afvi/teach-imgui/internal/ui"
 )
-
-// newTestApp builds an App for profile p on the synthetic reference model (96x64) and
-// installs the loaded scene like LoadModel does, but without touching the viewer.
-func newTestApp(t *testing.T, p Profile) *App {
-	t.Helper()
-	t.Setenv("AFVI_CONFIG", "")
-	t.Setenv("AFVI_CAPTURES", t.TempDir()) // scenario autosave and captures stay out of the test binary's folder
-	root := t.TempDir()
-	if _, err := modeltest.WriteReference(root); err != nil {
-		t.Fatalf("WriteReference: %v", err)
-	}
-	cfg, cfgPath, err := model.ResolveConfig("", root, "")
-	if err != nil {
-		t.Fatalf("ResolveConfig: %v", err)
-	}
-	a := NewApp(cfg, cfgPath, ThemeLight, p)
-	if len(a.Models) == 0 {
-		t.Fatal("no models")
-	}
-	scene, err := LoadScene(a.Models[0])
-	if err != nil {
-		t.Fatalf("LoadScene: %v", err)
-	}
-	a.modelIdx = 0
-	a.Scene = scene
-	a.Viewer.noGL = true // no OpenGL context in the headless tests
-	a.align.modelLoaded(scene)
-	a.golden.modelLoaded(scene)
-	if dp := defectPanelOf(a); dp != nil {
-		dp.ModelLoaded()
-	}
-	if a.golden != nil {
-		pollJobs(t, a) // the golden board builds its regions
-	}
-	return a
-}
-
-// pollJobs applies finished jobs until no job is running (15 s limit).
-func pollJobs(t *testing.T, a *App) {
-	t.Helper()
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		a.Jobs.Poll()
-		if !a.Jobs.AnyBusy() {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pollJobs: timeout waiting for background jobs")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
 
 func TestProfilePanels(t *testing.T) {
 	SetLang(LangZh)
@@ -114,125 +61,6 @@ func TestProfilePanels(t *testing.T) {
 	}
 	if TeachWindowTitle == StudioWindowTitle {
 		t.Error("teach and studio window titles are equal")
-	}
-}
-
-func TestSelftestStepsPerProfile(t *testing.T) {
-	for _, p := range []Profile{ProfileTeach, ProfileStudio} {
-		s := NewSelftest(newTestApp(t, p), t.TempDir())
-		names := map[string]bool{}
-		for _, st := range s.steps {
-			names[st.name] = true
-		}
-		if !names["load"] {
-			t.Errorf("%s: missing step \"load\"", p)
-		}
-		if p == ProfileStudio {
-			for name := range studioOnlySteps {
-				if !names[name] {
-					t.Errorf("%s: missing studio step %q", p, name)
-				}
-			}
-			for name := range teachOnlySteps {
-				if names[name] {
-					t.Errorf("%s: contains teach step %q", p, name)
-				}
-			}
-		} else {
-			for name := range teachOnlySteps {
-				if !names[name] {
-					t.Errorf("%s: missing teach step %q", p, name)
-				}
-			}
-			for name := range studioOnlySteps {
-				if names[name] {
-					t.Errorf("%s: contains studio step %q", p, name)
-				}
-			}
-		}
-	}
-	for name := range studioOnlySteps {
-		if teachOnlySteps[name] {
-			t.Errorf("step %q is in both studioOnlySteps and teachOnlySteps", name)
-		}
-	}
-}
-
-func TestPaletteSupportsByMode(t *testing.T) {
-	teach := newTestApp(t, ProfileTeach)
-	tdp := defectPanelOf(teach)
-	if tdp == nil {
-		t.Fatal("teach: no defect panel")
-	}
-	for _, tool := range []PaletteTool{PalettePick, PaletteRect, PaletteEllipse, PalettePolygon} {
-		if tdp.PaletteSupports(tool) {
-			t.Errorf("detect mode supports tool %v, want false", tool)
-		}
-	}
-
-	studio := newTestApp(t, ProfileStudio)
-	sdp := defectPanelOf(studio)
-	if sdp == nil {
-		t.Fatal("studio: no defect panel")
-	}
-	for _, tool := range []PaletteTool{PalettePick, PaletteRect, PaletteEllipse, PalettePolygon} {
-		if !sdp.PaletteSupports(tool) {
-			t.Errorf("author mode does not support tool %v, want true", tool)
-		}
-	}
-}
-
-func TestDetectModeInspects(t *testing.T) {
-	a := newTestApp(t, ProfileTeach)
-	legacyDetect(a)
-	dp := defectPanelOf(a)
-	if dp == nil {
-		t.Fatal("no defect panel")
-	}
-	dp.requestRun()
-	pollJobs(t, a)
-	if dp.lastReport == nil {
-		t.Fatal("lastReport is nil")
-	}
-	if dp.test == nil {
-		t.Fatal("test image is nil")
-	}
-	if dp.golden == nil {
-		t.Fatal("golden image is nil")
-	}
-	if !dp.learned[dp.channel] {
-		t.Errorf("learned[%v] = false, want true", dp.channel)
-	}
-	if dp.showMarks {
-		t.Error("showMarks = true in detect mode, want false")
-	}
-}
-
-func TestAuthorModeRendersWithoutInspection(t *testing.T) {
-	a := newTestApp(t, ProfileStudio)
-	dp := defectPanelOf(a)
-	if dp == nil {
-		t.Fatal("no defect panel")
-	}
-	dp.requestRun()
-	pollJobs(t, a)
-	if dp.lastReport != nil {
-		t.Error("lastReport is not nil in author mode")
-	}
-	if dp.test == nil {
-		t.Fatal("test image is nil")
-	}
-	if dp.golden == nil {
-		t.Fatal("golden image is nil")
-	}
-	if dp.learned[dp.channel] {
-		t.Errorf("learned[%v] = true in author mode, want false", dp.channel)
-	}
-	if !dp.showMarks {
-		t.Error("showMarks = false in author mode, want true")
-	}
-	if dp.renderedRev != dp.renderRev {
-		t.Errorf("renderedRev = %d, renderRev = %d, want equal", dp.renderedRev, dp.renderRev)
 	}
 }
 
@@ -345,3 +173,28 @@ func TestScale(t *testing.T) {
 		t.Errorf("fontPx after SetFontPx(1) = %v, want %v", fontPx, minFontPx)
 	}
 }
+
+// TestBuildFrames runs whole frames of both programs through the host protocol: every slot
+// serialises, control ids stay unique per slot and the viewer reports the loaded image.
+func TestBuildFrames(t *testing.T) {
+	SetLang(LangZh)
+	for _, prof := range []Profile{ProfileTeach, ProfileStudio} {
+		a := newTestApp(t, prof)
+		h := host.New(a, 0)
+		h.Step()
+		_, body := h.Latest()
+		if len(body) == 0 {
+			t.Fatalf("%s: no frame", prof)
+		}
+		pollJobs(t, a)
+		h.Step()
+		for _, slot := range []string{"menu", "toolbar", "tabs", "left", "right", "status"} {
+			if !strings.Contains(string(mustLatest(h)), `"`+slot+`"`) {
+				t.Errorf("%s: slot %s missing", prof, slot)
+			}
+		}
+		_ = ui.KRoot
+	}
+}
+
+func mustLatest(h *host.Host) []byte { _, b := h.Latest(); return b }

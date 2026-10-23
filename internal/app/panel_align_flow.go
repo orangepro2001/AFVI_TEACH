@@ -1,10 +1,9 @@
 package app
 
 import (
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/access"
 	"afvi/teach-imgui/internal/core"
+	"afvi/teach-imgui/internal/ui"
 )
 
 func init() {
@@ -397,6 +396,26 @@ func (p *AlignFlowPanel) Pointer(ev PointerEvent) bool {
 	return owned
 }
 
+// ClaimsDrag: over the picture a left drag draws a new ROI or moves one (the editor owns
+// every drag that starts inside the image); outside it, and for the Wails canvas that means
+// everywhere else, the view pans. A drag in progress stays claimed.
+func (p *AlignFlowPanel) ClaimsDrag() bool {
+	if p.flow() == nil || p.a.Scene == nil {
+		return false
+	}
+	if p.editor.mode != roiDragNone {
+		return true
+	}
+	return p.mouseOverPicture()
+}
+
+// mouseOverPicture reports whether the cursor is over the design picture.
+func (p *AlignFlowPanel) mouseOverPicture() bool {
+	x, y, inside := p.a.Viewer.Mouse()
+	s := p.a.Scene
+	return inside && s != nil && x >= 0 && y >= 0 && x < float64(s.W) && y < float64(s.H)
+}
+
 // Hover returns the material name under the pixel.
 func (p *AlignFlowPanel) Hover(x, y int) string {
 	scene := p.a.Scene
@@ -508,9 +527,8 @@ func (p *AlignFlowPanel) DrawRight() {
 
 // drawOperatorLeft is the big guided column of the operator page.
 func (p *AlignFlowPanel) drawOperatorLeft() {
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("opAlign.title"))
-	imgui.Separator()
+	Text(T("opAlign.title"))
+	ui.Separator()
 
 	dp := p.dp()
 	st := alignOff
@@ -530,33 +548,27 @@ func (p *AlignFlowPanel) drawOperatorLeft() {
 
 	p.drawBigBadge(st)
 
-	avail := imgui.ContentRegionAvail().X
-	if avail < sc(120) {
-		avail = sc(120)
-	}
-	btnSize := imgui.NewVec2(avail, sc(44))
-	if ButtonSized(T("opAlign.confirm"), "op-align-confirm", btnSize, st != alignWorking) {
+	if ui.ButtonEx(T("opAlign.confirm"), "op-align-confirm", st != alignWorking, true) {
 		p.confirm()
 	}
 	if p.msg == "needTwo" {
 		Warn(T("opAlign.needTwo"))
 	}
-	if ButtonSized(T("opAlign.reset"), "op-align-reset", btnSize, true) {
+	if Button(T("opAlign.reset"), "op-align-reset") {
 		p.resetBoxes()
 	}
 	enabledDel := p.editor != nil && p.editor.sel >= 0
-	if ButtonSized(T("opAlign.delete"), "op-align-delete", btnSize, enabledDel) {
+	if ButtonOn(T("opAlign.delete"), "op-align-delete", enabledDel) {
 		p.deleteSelected()
 	}
 	if st == alignDone {
-		if ButtonSized(T("opAlign.toGolden"), "op-align-to-golden", btnSize, true) {
+		if Button(T("opAlign.toGolden"), "op-align-to-golden") {
 			p.a.ShowPage(goldenPageID)
 		}
 	}
 
-	imgui.Separator()
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("flow.viewLabel"))
+	ui.Separator()
+	Text(T("flow.viewLabel"))
 	dp2 := p.dp()
 	var raw, aligned *core.GrayImage
 	if dp2 != nil {
@@ -580,7 +592,7 @@ func (p *AlignFlowPanel) drawOperatorLeft() {
 		}
 	}
 
-	if p.a.Viewer.Hovered() && imgui.IsKeyPressedBool(imgui.KeyDelete) {
+	if p.mouseOverPicture() && ui.KeyPressed("Delete") {
 		p.deleteSelected()
 	}
 }
@@ -595,23 +607,12 @@ func (p *AlignFlowPanel) drawOperatorRight() {
 
 // drawBigBadge draws a large status lamp in the operator page (colours as in Badge).
 func (p *AlignFlowPanel) drawBigBadge(st alignState) {
-	text := alignStateText(st)
-	bg, fg := rgba(255, 216, 0, 255), rgba(0, 0, 0, 255)
+	level := "manual"
 	switch st {
 	case alignDone:
-		bg = rgba(0, 192, 0, 255)
+		level = "ok"
 	case alignFailed:
-		bg, fg = rgba(255, 0, 0, 255), rgba(255, 255, 255, 255)
+		level = "ng"
 	}
-	pos := imgui.CursorScreenPos()
-	avail := imgui.ContentRegionAvail().X
-	h := sc(36)
-	end := imgui.NewVec2(pos.X+avail, pos.Y+h)
-	dl := imgui.WindowDrawList()
-	dl.AddRectFilled(pos, end, bg)
-	DrawEdge(dl, pos, end, EdgeSunken)
-	ts := imgui.CalcTextSize(text)
-	tp := imgui.NewVec2(pos.X+(avail-ts.X)/2, pos.Y+(h-ts.Y)/2)
-	dl.AddTextVec2(tp, fg, text)
-	imgui.Dummy(imgui.NewVec2(avail, h))
+	ui.AlignBanner(alignStateText(st), level)
 }

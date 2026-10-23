@@ -1,8 +1,6 @@
 package app
 
 import (
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/inspect"
 )
@@ -111,7 +109,7 @@ func (p *DefectPanel) drawVirtualSection() bool {
 		p.productOpts.Seed = uint32(1 + (p.productDraw*7919+int(p.productOpts.Seed)*31)%9999)
 		changed = true
 	}
-	imgui.SameLine()
+	SameLine()
 	if Button(T("defect.virtual.reset"), "virt-reset") {
 		p.productOpts = core.DefaultProductOptions()
 		p.productLenScale = 1
@@ -133,7 +131,7 @@ func (p *DefectPanel) drawVirtualSection() bool {
 		p.addAutoDefects()
 		changed = true
 	}
-	imgui.SameLine()
+	SameLine()
 	if Button(T("defect.virtual.autoRemove"), "virt-autoremove") {
 		p.removeAutoDefects()
 		changed = true

@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	"afvi/teach-imgui/internal/golden"
+	"afvi/teach-imgui/internal/ui"
 )
 
 // The two column drawings of the golden page. All board methods only queue work, so the
@@ -15,9 +14,8 @@ import (
 
 // DrawLeft draws the editing column of the golden page.
 func (p *GoldenPanel) DrawLeft() {
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("golden.title"))
-	imgui.Separator()
+	Text(T("golden.title"))
+	ui.Separator()
 	b := p.board()
 	if b == nil {
 		Note(T("golden.title"))
@@ -36,11 +34,7 @@ func (p *GoldenPanel) DrawLeft() {
 	p.goldenFileRow(b)
 
 	if b.Ready() {
-		avail := imgui.ContentRegionAvail().X
-		if avail < sc(120) {
-			avail = sc(120)
-		}
-		if ButtonSized(T("golden.next"), "golden-next", imgui.NewVec2(avail, sc(44)), true) {
+		if ui.ButtonEx(T("golden.next"), "golden-next", true, true) {
 			for _, id := range []string{"op-inspect", "defect"} {
 				if p.a.ShowPage(id) {
 					break
@@ -49,7 +43,7 @@ func (p *GoldenPanel) DrawLeft() {
 		}
 	}
 
-	if p.a.Viewer.Hovered() && imgui.CurrentIO().KeyCtrl() && imgui.IsKeyPressedBool(imgui.KeyZ) {
+	if ui.KeyPressed("Ctrl+Z") {
 		b.Undo()
 	}
 }
@@ -79,19 +73,14 @@ func (p *GoldenPanel) goldenSource(b *goldenBoard) {
 	if !Section(T("golden.section.source"), "golden-source") {
 		return
 	}
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("golden.channel"))
-	cur := b.Channel()
-	for i, ch := range []struct {
+	Text(T("golden.channel"))
+	curCh := b.Channel()
+	for _, ch := range []struct {
 		label, id string
 		ch        core.CameraChannel
 	}{{"R", "golden-ch-r", core.ChRed}, {"G", "golden-ch-g", core.ChGreen}, {"B", "golden-ch-b", core.ChBlue}} {
-		if i > 0 {
-			WrapSameLine(ch.label)
-		} else {
-			imgui.SameLine()
-		}
-		if ToolButton(ch.label, ch.id, cur == ch.ch) {
+		SameLine()
+		if ToolButton(ch.label, ch.id, curCh == ch.ch) {
 			b.SetChannel(ch.ch)
 		}
 	}
@@ -107,7 +96,7 @@ func (p *GoldenPanel) goldenRange(b *goldenBoard) {
 	if ToolButton(T("golden.range.in"), "golden-range-in", !out) {
 		out, changed = false, true
 	}
-	WrapSameLine(T("golden.range.out"))
+	SameLine()
 	if ToolButton(T("golden.range.out"), "golden-range-out", out) {
 		out, changed = true, true
 	}
@@ -142,7 +131,7 @@ func (p *GoldenPanel) goldenAction(b *goldenBoard) {
 		{T("golden.tool.erase"), "golden-tool-erase", goldenToolErase},
 	} {
 		if i > 0 {
-			WrapSameLine(t.label)
+			SameLine()
 		}
 		if ToolButton(t.label, t.id, p.tool == t.tool) {
 			p.setTool(t.tool)
@@ -158,7 +147,7 @@ func (p *GoldenPanel) goldenAction(b *goldenBoard) {
 			{T("golden.shape.polygon"), "golden-shape-pen", FramePen},
 		} {
 			if i > 0 {
-				WrapSameLine(s.label)
+				SameLine()
 			}
 			if ToolButton(s.label, s.id, p.frame.Kind == s.kind) {
 				p.setShape(s.kind)
@@ -192,7 +181,7 @@ func (p *GoldenPanel) goldenMorph() {
 		return
 	}
 	for i, key := range []string{"open", "close", "erode", "dilate"} {
-		imgui.TextUnformatted(T("golden.morph." + key))
+		Text(T("golden.morph." + key))
 		SliderInputInt(T("golden.morph.n"), "golden-morph-n-"+key, &p.morphN[i], 1, 64)
 		if Button(T("golden.apply"), "golden-morph-apply-"+key) {
 			p.applyMorph(i)
@@ -224,14 +213,9 @@ func (p *GoldenPanel) goldenDisplay(b *goldenBoard) {
 	}
 	v := b.View()
 	changed := false
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("golden.display.color"))
-	for i, c := range goldenColors {
-		if i > 0 {
-			WrapSameLine(T("golden.color." + c.key))
-		} else {
-			imgui.SameLine()
-		}
+	Text(T("golden.display.color"))
+	for _, c := range goldenColors {
+		SameLine()
 		if ToolButton(T("golden.color."+c.key), "golden-color-"+c.key, v.Color == c.rgb) {
 			v.Color, changed = c.rgb, true
 		}
@@ -257,22 +241,21 @@ func (p *GoldenPanel) goldenDisplay(b *goldenBoard) {
 // goldenFileRow draws Undo / Auto / Save / Load.
 func (p *GoldenPanel) goldenFileRow(b *goldenBoard) {
 	undo := T("golden.undo")
-	undoSize := imgui.NewVec2(ButtonWidth(undo), imgui.FrameHeight()+2)
-	if ButtonSized(undo, "golden-undo", undoSize, b.CanUndo()) {
+	if ButtonOn(undo, "golden-undo", b.CanUndo()) {
 		b.Undo()
 	}
 	auto := T("golden.auto")
-	WrapSameLine(auto)
+	SameLine()
 	if Button(auto, "golden-auto") {
 		b.Auto()
 	}
 	save := T("golden.save")
-	WrapSameLine(save)
+	SameLine()
 	if Button(save, "golden-save") {
 		_ = b.Save()
 	}
 	load := T("golden.load")
-	WrapSameLine(load)
+	SameLine()
 	if Button(load, "golden-load") {
 		_ = b.Load()
 	}
@@ -284,7 +267,7 @@ func (p *GoldenPanel) DrawRight() {
 	Note(T("golden.help.2"))
 	Note(T("golden.help.3"))
 	Note(T("golden.help.4"))
-	imgui.Separator()
+	ui.Separator()
 	b := p.board()
 	if b == nil {
 		return

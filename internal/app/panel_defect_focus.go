@@ -3,8 +3,6 @@ package app
 import (
 	"strconv"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/golden"
 	"afvi/teach-imgui/internal/inspect"
 )
@@ -144,9 +142,8 @@ func focusPolName(pol focusPolarity) string {
 // drawFocusFilter draws the polarity filter row of the result column.
 func (p *DefectPanel) drawFocusFilter(r *inspect.Report) {
 	all, bright, dark := focusCounts(r, p.focus.material())
-	imgui.AlignTextToFramePadding()
-	imgui.TextUnformatted(T("defect.filter.label"))
-	imgui.SameLine()
+	Text(T("defect.filter.label"))
+	SameLine()
 
 	entries := []struct {
 		id    string

@@ -7,8 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 	snapfmt "afvi/teach-imgui/internal/snap"
 )
@@ -78,7 +76,7 @@ func (p *DefectPanel) drawOutputPanel() {
 		Check(T("studio.out.good"), "studio-good", &p.studio.good)
 		Check(T("studio.out.recipe"), "studio-recipe", &p.studio.recipe)
 		enabled := (exe != "" || p.studio.recipe) && !p.a.Jobs.Busy("studio-save")
-		if ButtonSized(T("studio.out.save"), "studio-save", imgui.NewVec2(ButtonWidth(T("studio.out.save")), imgui.FrameHeight()+2), enabled) {
+		if ButtonOn(T("studio.out.save"), "studio-save", enabled) {
 			if !p.studio.recipe && !p.studio.channels[0] && !p.studio.channels[1] && !p.studio.channels[2] {
 				p.studio.msgKey, p.studio.msgText, p.studio.msgErr = "studio.out.noChannel", "", true
 			} else {

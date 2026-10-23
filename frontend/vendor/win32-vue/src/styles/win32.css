@@ -1,0 +1,6 @@
+/* win32-vue — single import entry point.
+ * Usage:  import '@win32-vue/win32/styles/win32.css'
+ */
+@import './tokens.css';
+@import './base.css';
+@import './bevel.css';

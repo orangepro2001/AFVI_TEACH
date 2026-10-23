@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/inspect"
 )
 
@@ -98,7 +96,7 @@ func (p *DefectPanel) drawTileGlobal(params *inspect.Params) bool {
 // drawMaterialRules draws, for one material of the current channel's parameters, the Offset 1 (absolute) and Offset 2 (percent) rules; it reports whether anything changed.
 func (p *DefectPanel) drawMaterialRules(m inspect.Material, mp *inspect.MaterialParams) bool {
 	changed := false
-	imgui.TextUnformatted(T("defect.rule.abs.title"))
+	Text(T("defect.rule.abs.title"))
 	if Check(T("defect.rule.enable"), fmt.Sprintf("insp-abs-en-%d", m), &mp.Abs.Enabled) {
 		changed = true
 	}
@@ -119,7 +117,7 @@ func (p *DefectPanel) drawMaterialRules(m inspect.Material, mp *inspect.Material
 		changed = true
 	}
 
-	imgui.TextUnformatted(T("defect.rule.pct.title"))
+	Text(T("defect.rule.pct.title"))
 	if Check(T("defect.rule.enable"), fmt.Sprintf("insp-pct-en-%d", m), &mp.Pct.Enabled) {
 		changed = true
 	}

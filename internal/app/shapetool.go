@@ -3,8 +3,6 @@ package app
 import (
 	"math"
 
-	"github.com/AllenDang/cimgui-go/imgui"
-
 	"afvi/teach-imgui/internal/core"
 )
 
@@ -134,10 +132,10 @@ func (t *FrameTool) Draw(o *Overlay, mouseX, mouseY float64, col uint32) {
 		if len(t.points) >= 2 {
 			o.Line(mouseX, mouseY, t.points[0].X, t.points[0].Y, col, 1)
 		}
-		dl := o.DL
+		// Vertex markers: small circles (the front end has no screen-space squares).
+		r := 2.5 / math.Max(float64(o.Scale()), 1e-6)
 		for _, p := range t.points {
-			s := o.ToScreen(p.X, p.Y)
-			dl.AddRectFilled(imgui.NewVec2(s.X-2, s.Y-2), imgui.NewVec2(s.X+2, s.Y+2), col)
+			o.Circle(p.X, p.Y, r, col, 2)
 		}
 	}
 }
