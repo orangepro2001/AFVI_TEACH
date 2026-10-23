@@ -194,7 +194,7 @@ func loop(a *App) {
 func setupFonts() {
 	atlas := imgui.CurrentIO().Fonts()
 	base := true
-	for _, path := range []string{`C:\Windows\Fonts\tahoma.ttf`, `C:\Windows\Fonts\msyh.ttc`, `C:\Windows\Fonts\malgun.ttf`} {
+	for _, path := range fontPaths() {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
