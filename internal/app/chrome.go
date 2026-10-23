@@ -210,7 +210,8 @@ func (a *App) handleResizeEdges(winX, winY, winW, winH float32) {
 	a.be.SetWindowSize(int(w), int(h))
 }
 
-// enableChrome removes the OS frame once the window exists.
+// enableChrome removes the OS frame. The flag is a GLFW window hint, so it only takes
+// effect for a window created afterwards: call it before CreateWindow.
 func (a *App) enableChrome() {
 	a.chrome.on = true
 	a.be.SetWindowFlags(glfwbackend.GLFWWindowFlagsDecorated, 0)

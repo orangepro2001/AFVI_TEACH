@@ -108,10 +108,10 @@ func runProfile(profile Profile) {
 		}
 	})
 	be.SetBgColor(imgui.NewVec4(0.17, 0.17, 0.17, 1))
-	be.CreateWindow(profile.WindowTitle(), 1600, 1000)
 	if *chromeFlag && !*nativeFrame {
-		a.enableChrome()
+		a.enableChrome() // a window hint: it must be set before the window is created
 	}
+	be.CreateWindow(profile.WindowTitle(), 1600, 1000)
 	if a.selftest != nil {
 		be.SetTargetFPS(1000)
 	} else {
