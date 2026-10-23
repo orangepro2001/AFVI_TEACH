@@ -1,0 +1,23 @@
+[
+ {"wait":7000},
+ {"text":"确定对位"},
+ {"shot":"@OUT/teach-operator-align.png"},
+ {"click":"op-align-confirm"},
+ {"wait":4000},
+ {"cmd":{"id":"tabs","op":"set","v":1}},
+ {"wait":4000},
+ {"shot":"@OUT/teach-golden.png"},
+ {"cmd":{"id":"tabs","op":"set","v":2}},
+ {"wait":3000},
+ {"text":"检测"},
+ {"shot":"@OUT/teach-inspect.png"},
+ {"cmd":{"id":"menu:login","op":"click"}},
+ {"wait":800},
+ {"cmd":{"id":"login-user","op":"set","v":"admin"}},
+ {"cmd":{"id":"login-pass","op":"set","v":"1"}},
+ {"click":"login-ok"},
+ {"wait":2500},
+ {"text":"对位试验台"},
+ {"shot":"@OUT/teach-admin.png"},
+ {"quit":true}
+]

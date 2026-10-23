@@ -20,6 +20,13 @@ import (
 	"afvi/teach-imgui/internal/model"
 )
 
+// WindowRunner, when set (by internal/qtui in the Qt builds), opens the window instead of
+// the Wails one. It returns when the window is closed.
+var WindowRunner func(h *host.Host, a *App) error
+
+// Quit reports whether the program asked to quit (the Exit menu item).
+func (a *App) Quitting() bool { return a.quit }
+
 // Run runs the teaching program (align bench + guided operator pages); cmd/teach-imgui
 // calls it with the built front end. It starts on the operator pages unless -login is given.
 func Run(assets fs.FS) { runProfile(ProfileTeach, assets) }
@@ -101,7 +108,7 @@ func runProfile(profile Profile, assets fs.FS) {
 
 	if *web != "" {
 		serveWeb(*web, h, assets, a)
-	} else if err := runWindow(h, a, assets); err != nil {
+	} else if err := openWindow(h, a, assets); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		cancel()
 		a.closeLive()
@@ -183,4 +190,11 @@ func (a *App) closePanels() {
 			c.Close()
 		}
 	}
+}
+
+func openWindow(h *host.Host, a *App, assets fs.FS) error {
+	if WindowRunner != nil {
+		return WindowRunner(h, a)
+	}
+	return runWindow(h, a, assets)
 }

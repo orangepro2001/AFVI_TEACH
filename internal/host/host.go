@@ -174,6 +174,19 @@ func (h *Host) Run(ctx context.Context) {
 	}
 }
 
+// Image returns level lvl of the current viewer image (in-process consumers such as the
+// Qt front end; the HTTP /img does the same for the browser).
+func (h *Host) Image(lvl int) (pix []byte, w, hh int, gray bool, rev, fullW, fullH int) {
+	h.mu.Lock()
+	im := h.img
+	h.mu.Unlock()
+	if im.pyr == nil || im.pyr.src == nil {
+		return nil, 0, 0, false, im.rev, 0, 0
+	}
+	pix, w, hh, gray = im.pyr.get(lvl)
+	return pix, w, hh, gray, im.rev, im.w, im.h
+}
+
 // Frame returns the latest frame JSON and its sequence number.
 func (h *Host) Latest() (int, []byte) {
 	h.mu.Lock()

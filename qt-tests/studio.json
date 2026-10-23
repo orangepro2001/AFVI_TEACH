@@ -1,0 +1,18 @@
+[
+ {"wait":6000},
+ {"text":"光源"},
+ {"cmd":{"id":"gain","op":"set","v":2.5}},
+ {"cmd":{"id":"showmat","op":"set","v":true}},
+ {"wait":1500},
+ {"shot":"@OUT/studio-light.png"},
+ {"cmd":{"id":"tabs","op":"set","v":1}},
+ {"wait":2500},
+ {"text":"笔刷"},
+ {"click":"defect-tool-0"},
+ {"cmd":{"id":"viewer","op":"ptr","k":"down","x":2930,"y":2010}},
+ {"cmd":{"id":"viewer","op":"ptr","k":"up","x":2930,"y":2010}},
+ {"wait":1500},
+ {"text":"亮点"},
+ {"shot":"@OUT/studio-defect.png"},
+ {"quit":true}
+]
