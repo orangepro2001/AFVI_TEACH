@@ -96,27 +96,18 @@ async function fetchLevel(rev: number, k: number, signal: AbortSignal): Promise<
 
 // Load the level the view needs for revision `rev`: a quick coarse preview first (so a
 // stream of new images stays cheap), the sharp level once the image has been stable.
-async function loadRev(rev: number, sharpDelay: number) {
+async function loadRev(rev: number, _sharpDelay: number) {
   ctl?.abort()
   ctl = new AbortController()
   const signal = ctl.signal
   wantRev = rev
-  const want = levelFor(zoom)
-  const preview = Math.max(want, Math.min(MAXL, 3))
+  // Fetch exactly the level the current zoom needs. The previous image stays on screen until
+  // it lands (no blurry coarse preview: at the zoom where a coarse level is not enough, the
+  // sharp level costs ~80 ms locally); a newer revision aborts this request.
   try {
-    if (!levels.has(preview) || shownRev !== rev) {
-      const l = await fetchLevel(rev, preview, signal)
-      if (l && wantRev === rev) adopt(rev, preview, l)
-    }
-    if (want < preview) {
-      await new Promise((res) => (sharpTimer = setTimeout(res, sharpDelay)))
-      if (wantRev !== rev || signal.aborted) return
-      const k = levelFor(zoom)
-      if (!levels.has(k)) {
-        const l = await fetchLevel(rev, k, signal)
-        if (l && wantRev === rev) adopt(rev, k, l)
-      }
-    }
+    const k = levelFor(zoom)
+    const l = await fetchLevel(rev, k, signal)
+    if (l && wantRev === rev) adopt(rev, k, l)
   } catch { /* aborted or retried by the next frame */ }
 }
 
