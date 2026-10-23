@@ -299,3 +299,13 @@ export GOPROXY=https://goproxy.cn,direct
 - `scripts/build-wsl.sh`：WSL2 构建脚本
 - `docs/SERVER_CI.md`、`deploy/server/`：构建服务器的自动构建与发布
 - `configs/afvi.example.toml`：机台配置示例
+
+## 把安装包自动送到 Windows 桌面（服务器 → Windows，拉取方式）
+
+Windows 不用开任何服务，只要 Win10/11 自带的 OpenSSH 客户端和到构建服务器（ssh 别名 `AI`）的免密登录：
+
+1. 服务器：`./scripts/build-wsl.sh --publish-latest ...`（或单独 `./scripts/publish-latest.sh [安装包]`）把安装包放到 `~/afvi-latest/`，保留最新 3 个，并写 `LATEST.txt`、`SHA256SUMS.txt`。
+2. Windows：`.\scripts\fetch-latest.ps1` 读取这两个文件，没有新版本就什么都不做，有新版本就 `scp` 下载、核对 sha256、放到桌面（OneDrive 重定向的桌面也可以）；日志在 `%LOCALAPPDATA%\AFVI\fetch-latest.log`。
+3. 自动化：`.\scripts\register-fetch-task.ps1` 注册当前用户的计划任务（登录时 + 每 10 分钟，`-IntervalMinutes` 可改，`-Unregister` 删除），不需要管理员权限，脚本副本放在 `%LOCALAPPDATA%\AFVI\`。
+
+这些 PowerShell 脚本在 Linux 上只做了语法层面的检查，没有在 Windows 上运行过。

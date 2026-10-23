@@ -19,6 +19,7 @@
 #   --push             then push the branch to origin (never implied by --commit)
 #   --desktop          copy the installer to the Windows desktop (sha256 checked)
 #   --desktop-dir DIR  copy it to DIR instead (implies --desktop)
+#   --publish-latest   copy the installer to ~/afvi-latest for scripts/fetch-latest.ps1 on the Windows PC
 #   --fetch            wait for the build server's installer of the pushed commit (GitHub Release nightly,
 #                      up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 #
@@ -40,6 +41,7 @@ PUSH=false
 DESKTOP=false
 DESKTOP_DIR=""
 FETCH=false
+PUBLISH_LATEST=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -86,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --fetch)
             FETCH=true
+            shift
+            ;;
+        --publish-latest)
+            PUBLISH_LATEST=true
             shift
             ;;
         *)
@@ -237,6 +243,15 @@ elif [ "$DESKTOP" = true ]; then
     fi
     echo "==> installer to the desktop (scripts/ship-wsl.sh desktop)"
     ./scripts/ship-wsl.sh desktop "${ship_args[@]}"
+fi
+
+if [ "$PUBLISH_LATEST" = true ]; then
+    if [ "$INSTALLER" != true ]; then
+        echo "ERROR: --publish-latest needs the installer (drop --no-installer)"
+        exit 1
+    fi
+    echo "==> publish the installer for the Windows PC (scripts/publish-latest.sh)"
+    ./scripts/publish-latest.sh
 fi
 
 echo "OK"
