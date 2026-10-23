@@ -1,8 +1,10 @@
 package app
 
 import (
+	"fmt"
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/AllenDang/cimgui-go/imgui"
 
@@ -36,6 +38,7 @@ func labelColumn(label string) {
 
 // Section is a collapsible group (open by default).
 func Section(title, id string) bool {
+	imgui.Dummy(imgui.NewVec2(0, sc(2)))
 	face := PaletteVec4(CurrentPalette().Face)
 	imgui.PushStyleColorVec4(imgui.ColHeader, face)
 	imgui.PushStyleColorVec4(imgui.ColHeaderHovered, face)
@@ -48,6 +51,7 @@ func Section(title, id string) bool {
 
 // SectionClosed is a collapsible group that starts collapsed.
 func SectionClosed(title, id string) bool {
+	imgui.Dummy(imgui.NewVec2(0, sc(2)))
 	face := PaletteVec4(CurrentPalette().Face)
 	imgui.PushStyleColorVec4(imgui.ColHeader, face)
 	imgui.PushStyleColorVec4(imgui.ColHeaderHovered, face)
@@ -58,48 +62,159 @@ func SectionClosed(title, id string) bool {
 	return open
 }
 
-// SliderF64 edits a float64 with a slider (Ctrl+click to type a value).
-func SliderF64(label, id string, v *float64, min, max float64, format string) bool {
-	labelColumn(label)
-	f := float32(*v)
-	changed := imgui.SliderFloatV("##"+id, &f, float32(min), float32(max), format, imgui.SliderFlagsAlwaysClamp)
-	ItemEdge(EdgeSunken)
-	if changed {
-		*v = float64(f)
-		return true
+// trackbarEdit holds the ids of sliders whose value is being typed (Ctrl+click) instead of dragged.
+var trackbarEdit = map[string]bool{}
+
+// trackbar draws a Win32 trackbar (sunken groove, raised thumb) of the given size and returns
+// the new position 0..1 and whether the user moved it. A click or drag sets the position under
+// the cursor, like the page-jump of a classic trackbar thumb that follows the mouse.
+func trackbar(id string, frac float32, size imgui.Vec2) (float32, bool) {
+	imgui.InvisibleButton("##tb-"+id, size)
+	min, max := imgui.ItemRectMin(), imgui.ItemRectMax()
+	active := imgui.IsItemActive()
+	thumbW, thumbH := sc(11), min2(size.Y, sc(22))
+	span := max.X - min.X - thumbW
+	if span < 1 {
+		span = 1
 	}
-	return false
+	changed := false
+	if active {
+		f := (imgui.MousePos().X - min.X - thumbW/2) / span
+		if f < 0 {
+			f = 0
+		} else if f > 1 {
+			f = 1
+		}
+		if f != frac {
+			frac, changed = f, true
+		}
+	}
+	dl := imgui.WindowDrawList()
+	p := CurrentPalette()
+	midY := (min.Y + max.Y) / 2
+	grooveH := sc(4)
+	DrawEdge(dl, imgui.NewVec2(min.X+thumbW/2-1, midY-grooveH/2), imgui.NewVec2(max.X-thumbW/2+1, midY+grooveH/2), EdgeSunken)
+	tx := min.X + frac*span
+	tmin := imgui.NewVec2(tx, midY-thumbH/2)
+	tmax := imgui.NewVec2(tx+thumbW, midY+thumbH/2)
+	FillRect(dl, tmin, tmax, p.Face)
+	if active {
+		DrawEdge(dl, tmin, tmax, EdgePressed)
+	} else {
+		DrawEdge(dl, tmin, tmax, EdgeRaised)
+	}
+	if imgui.IsItemFocused() {
+		DottedRect(dl, imgui.NewVec2(min.X, min.Y), imgui.NewVec2(max.X, max.Y), TextColor())
+	}
+	return frac, changed
 }
 
-// SliderInt edits an int with a slider.
-func SliderInt(label, id string, v *int, min, max int) bool {
-	labelColumn(label)
-	i := int32(*v)
-	changed := imgui.SliderIntV("##"+id, &i, int32(min), int32(max), "%d", imgui.SliderFlagsAlwaysClamp)
-	ItemEdge(EdgeSunken)
-	if changed {
-		*v = int(i)
-		return true
+func min2(a, b float32) float32 {
+	if a < b {
+		return a
 	}
-	return false
+	return b
 }
 
-// SliderInputF64 edits a float64 with a slider and, to its right, a small numeric field in which the value can be typed.
-func SliderInputF64(label, id string, v *float64, min, max float64, format string) bool {
+// sliderValueW is the width reserved right of a trackbar for its value readout.
+func sliderValueW() float32 { return sc(58) }
+
+// sliderCore draws label, trackbar and value readout (or the typed field while Ctrl+click
+// editing). It reports whether the value changed.
+func sliderCore(label, id string, v *float64, min, max float64, format string, isInt bool, trailing float32) bool {
 	labelColumn(label)
 	avail := imgui.ContentRegionAvail().X
+	readW := sliderValueW()
+	trackW := avail - readW - imgui.CurrentStyle().ItemSpacing().X - trailing - groupInset
+	if trackW < sc(40) {
+		trackW = sc(40)
+	}
+	if trackbarEdit[id] {
+		imgui.SetNextItemWidth(avail - groupInset - trailing)
+		val := *v
+		imgui.SetKeyboardFocusHere()
+		done := imgui.InputDoubleV("##"+id+"-edit", &val, 0, 0, format, imgui.InputTextFlagsAutoSelectAll|imgui.InputTextFlagsEnterReturnsTrue)
+		ItemEdge(EdgeSunken)
+		if done || imgui.IsKeyPressedBool(imgui.KeyEscape) || (!imgui.IsItemActive() && !imgui.IsItemFocused() && imgui.IsMouseClickedBool(imgui.MouseButtonLeft)) {
+			delete(trackbarEdit, id)
+		}
+		if done {
+			val = math.Min(max, math.Max(min, val))
+			if isInt {
+				val = math.Round(val)
+			}
+			if val != *v {
+				*v = val
+				return true
+			}
+		}
+		return false
+	}
+	frac := float32(0)
+	if max > min {
+		frac = float32((*v - min) / (max - min))
+	}
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+	nf, changed := trackbar(id, frac, imgui.NewVec2(trackW, imgui.FrameHeight()))
+	if imgui.IsItemClicked() && imgui.CurrentIO().KeyCtrl() {
+		trackbarEdit[id] = true
+		changed = false
+	}
+	imgui.SameLine()
+	imgui.AlignTextToFramePadding()
+	text := F(*v, 2)
+	if isInt {
+		text = strconv.Itoa(int(math.Round(*v)))
+	} else if format != "" {
+		text = fmtSlider(*v, format)
+	}
+	tw := imgui.CalcTextSize(text).X
+	if gap := readW - tw; gap > 0 {
+		imgui.SetCursorPosX(imgui.CursorPosX() + gap)
+	}
+	imgui.TextUnformatted(text)
+	if !changed {
+		return false
+	}
+	nv := min + float64(nf)*(max-min)
+	if isInt {
+		nv = math.Round(nv)
+	}
+	if nv == *v {
+		return false
+	}
+	*v = nv
+	return true
+}
+
+// fmtSlider applies a printf-style float format such as "%.2f" or "%.0f".
+func fmtSlider(v float64, format string) string {
+	return fmt.Sprintf(format, v)
+}
+
+// SliderF64 edits a float64 with a trackbar (Ctrl+click to type a value).
+func SliderF64(label, id string, v *float64, min, max float64, format string) bool {
+	return sliderCore(label, id, v, min, max, format, false, 0)
+}
+
+// SliderInt edits an int with a trackbar.
+func SliderInt(label, id string, v *int, min, max int) bool {
+	f := float64(*v)
+	if sliderCore(label, id, &f, float64(min), float64(max), "%d", true, 0) {
+		*v = int(f)
+		return true
+	}
+	return false
+}
+
+// SliderInputF64 edits a float64 with a trackbar and, to its right, a small numeric field in which the value can be typed.
+func SliderInputF64(label, id string, v *float64, min, max float64, format string) bool {
 	fieldW := sc(64)
-	sliderW := avail - fieldW - imgui.CurrentStyle().ItemSpacing().X - groupInset
-	if sliderW < sc(40) {
-		sliderW = sc(40)
-	}
-	f := float32(*v)
-	imgui.SetNextItemWidth(sliderW)
-	changed := imgui.SliderFloatV("##"+id, &f, float32(min), float32(max), format, imgui.SliderFlagsAlwaysClamp)
-	ItemEdge(EdgeSunken)
-	if changed {
-		*v = float64(f)
-	}
+	changed := sliderFieldCore(label, id, v, min, max, format, false, fieldW)
 	imgui.SameLine()
 	imgui.SetNextItemWidth(fieldW)
 	val := *v
@@ -120,19 +235,11 @@ func SliderInputF64(label, id string, v *float64, min, max float64, format strin
 
 // SliderInputInt edits an int the same way.
 func SliderInputInt(label, id string, v *int, min, max int) bool {
-	labelColumn(label)
-	avail := imgui.ContentRegionAvail().X
+	f := float64(*v)
 	fieldW := sc(64)
-	sliderW := avail - fieldW - imgui.CurrentStyle().ItemSpacing().X - groupInset
-	if sliderW < sc(40) {
-		sliderW = sc(40)
-	}
-	i := int32(*v)
-	imgui.SetNextItemWidth(sliderW)
-	changed := imgui.SliderIntV("##"+id, &i, int32(min), int32(max), "%d", imgui.SliderFlagsAlwaysClamp)
-	ItemEdge(EdgeSunken)
+	changed := sliderFieldCore(label, id, &f, float64(min), float64(max), "%d", true, fieldW)
 	if changed {
-		*v = int(i)
+		*v = int(f)
 	}
 	imgui.SameLine()
 	imgui.SetNextItemWidth(fieldW)
@@ -150,6 +257,38 @@ func SliderInputInt(label, id string, v *int, min, max int) bool {
 	}
 	ItemEdge(EdgeSunken)
 	return changed
+}
+
+// sliderFieldCore is a trackbar without value readout (a typed field follows it).
+func sliderFieldCore(label, id string, v *float64, min, max float64, format string, isInt bool, trailing float32) bool {
+	labelColumn(label)
+	avail := imgui.ContentRegionAvail().X
+	trackW := avail - trailing - imgui.CurrentStyle().ItemSpacing().X - groupInset
+	if trackW < sc(40) {
+		trackW = sc(40)
+	}
+	frac := float32(0)
+	if max > min {
+		frac = float32((*v - min) / (max - min))
+	}
+	if frac < 0 {
+		frac = 0
+	} else if frac > 1 {
+		frac = 1
+	}
+	nf, changed := trackbar(id, frac, imgui.NewVec2(trackW, imgui.FrameHeight()))
+	if !changed {
+		return false
+	}
+	nv := min + float64(nf)*(max-min)
+	if isInt {
+		nv = math.Round(nv)
+	}
+	if nv == *v {
+		return false
+	}
+	*v = nv
+	return true
 }
 
 // InputF64 edits a float64 in a numeric field with +/- step buttons.
@@ -429,42 +568,111 @@ func DataTable(id string, headers []string, rows int, height float32, cell func(
 	}, selected)
 }
 
+// tableWidthCache remembers the natural width of a table's content so columns can stretch
+// across the available width when everything fits (and scroll when it does not).
+var tableWidthCache = map[string]struct {
+	w  float32
+	at time.Time
+}{}
+
+// naturalTableWidth measures the headers and up to 120 rows (re-measured twice a second).
+func naturalTableWidth(key string, headers []string, rows int, cell func(row, col int) (string, *imgui.Vec4)) float32 {
+	if c, ok := tableWidthCache[key]; ok && time.Since(c.at) < 500*time.Millisecond {
+		return c.w
+	}
+	pad := imgui.CurrentStyle().CellPadding().X*2 + sc(8)
+	total := float32(0)
+	for c, h := range headers {
+		w := imgui.CalcTextSize(h).X
+		n := rows
+		if n > 120 {
+			n = 120
+		}
+		for r := 0; r < n; r++ {
+			t, _ := cell(r, c)
+			if tw := imgui.CalcTextSize(t).X; tw > w {
+				w = tw
+			}
+		}
+		total += w + pad
+	}
+	tableWidthCache[key] = struct {
+		w  float32
+		at time.Time
+	}{total, time.Now()}
+	return total
+}
+
 // DataTableColored is DataTable whose cells may carry a text colour (nil keeps the default).
-// The first column is the selectable row label and is never coloured.
+// The first column is the selectable row label and is never coloured. Classic look: raised
+// column headers, navy selection with white text, columns that stretch across the width when
+// the content fits and scroll (without cutting a column off) when it does not.
 func DataTableColored(id string, headers []string, rows int, height float32, cell func(row, col int) (string, *imgui.Vec4), selected int) int {
 	clicked := -1
-	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBorders | imgui.TableFlagsScrollY | imgui.TableFlagsScrollX |
-		imgui.TableFlagsSizingFixedFit | imgui.TableFlagsResizable
-	// Language in the id: fixed-fit widths are measured per script.
-	if !imgui.BeginTableV("##dt-"+id+"-"+string(CurrentLang()), int32(len(headers)), flags, imgui.NewVec2(0, height), 0) {
+	key := id + "-" + string(CurrentLang())
+	need := naturalTableWidth(key, headers, rows, cell)
+	fits := need+imgui.CurrentStyle().ScrollbarSize() <= imgui.ContentRegionAvail().X
+	flags := imgui.TableFlagsRowBg | imgui.TableFlagsBorders | imgui.TableFlagsScrollY | imgui.TableFlagsResizable
+	if fits {
+		flags |= imgui.TableFlagsSizingStretchProp
+	} else {
+		flags |= imgui.TableFlagsScrollX | imgui.TableFlagsSizingFixedFit
+	}
+	// Language and mode in the id: fixed-fit widths are measured per script.
+	mode := "f"
+	if fits {
+		mode = "s"
+	}
+	if !imgui.BeginTableV("##dt-"+key+mode, int32(len(headers)), flags, imgui.NewVec2(0, height), 0) {
 		return clicked
 	}
 	imgui.TableSetupScrollFreeze(1, 1)
 	for _, h := range headers {
 		imgui.TableSetupColumnV(h, 0, 0, 0)
 	}
-	imgui.TableHeadersRow()
+	// Raised bevelled header cells, like a Win32 list-view header.
+	imgui.TableNextRowV(imgui.TableRowFlagsHeaders, 0)
+	for c, h := range headers {
+		imgui.TableSetColumnIndex(int32(c))
+		imgui.TableHeader(h)
+		ItemEdge(EdgeRaised)
+	}
+	p := CurrentPalette()
+	sel := PaletteVec4(p.Select)
+	selText := PaletteVec4(p.SelectText)
 	clipper := imgui.NewListClipper()
 	clipper.Begin(int32(rows))
 	for clipper.Step() {
 		for r := int(clipper.DisplayStart()); r < int(clipper.DisplayEnd()); r++ {
 			imgui.TableNextRow()
+			isSel := r == selected
+			if isSel {
+				imgui.TableSetBgColor(imgui.TableBgTargetRowBg0, p.Select)
+				imgui.TableSetBgColor(imgui.TableBgTargetRowBg1, p.Select)
+				imgui.PushStyleColorVec4(imgui.ColHeader, sel)
+				imgui.PushStyleColorVec4(imgui.ColHeaderHovered, sel)
+				imgui.PushStyleColorVec4(imgui.ColHeaderActive, sel)
+				imgui.PushStyleColorVec4(imgui.ColText, selText)
+			}
 			for c := range headers {
 				imgui.TableSetColumnIndex(int32(c))
 				text, col := cell(r, c)
 				if c == 0 {
-					if imgui.SelectableBoolV(text+"##row"+strconv.Itoa(r), r == selected, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
+					if imgui.SelectableBoolV(text+"##row"+strconv.Itoa(r), isSel, imgui.SelectableFlagsSpanAllColumns, imgui.NewVec2(0, 0)) {
 						clicked = r
 					}
 					continue
 				}
-				if col != nil {
+				if col != nil && !isSel {
 					imgui.PushStyleColorVec4(imgui.ColText, *col)
 				}
 				imgui.TextUnformatted(text)
-				if col != nil {
+				if col != nil && !isSel {
 					imgui.PopStyleColor()
 				}
+			}
+			if isSel {
+				imgui.PopStyleColorV(4)
 			}
 		}
 	}

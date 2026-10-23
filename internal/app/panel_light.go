@@ -296,8 +296,8 @@ func (p *LightPanel) DrawLeft() {
 	if Section(T("light.section.light"), "light-src") {
 		for i := range a.Light.Channels {
 			ch := &a.Light.Channels[i]
-			imgui.PushIDInt(int32(i))
-			if imgui.Checkbox("##en", &ch.Enable) {
+			id := fmt.Sprintf("light-ch%d", i)
+			if Check("", id+"-en", &ch.Enable) {
 				changed = true
 			}
 			imgui.SameLine()
@@ -305,19 +305,14 @@ func (p *LightPanel) DrawLeft() {
 			if int(ch.Color) < len(lightColorNames) {
 				name = lightColorNames[ch.Color]
 			}
-			imgui.AlignTextToFramePadding()
-			imgui.TextUnformatted(name)
-			imgui.SameLineV(labelWidth(), -1)
-			imgui.SetNextItemWidth(-1)
-			v := int32(ch.Value)
-			if imgui.SliderIntV("##val", &v, 0, 1024, "%d", imgui.SliderFlagsAlwaysClamp) {
+			v := int(ch.Value)
+			if SliderInt(name, id+"-val", &v, 0, 1024) {
 				ch.Value = float64(v)
 				if v > 0 {
 					ch.Enable = true
 				}
 				changed = true
 			}
-			imgui.PopID()
 		}
 	}
 	if Section(T("light.section.channel"), "light-ch") {

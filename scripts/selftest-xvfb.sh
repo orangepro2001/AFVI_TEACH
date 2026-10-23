@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 REF="${AFVI_REF:-$PWD/reference}"
 OUT="${1:-selftest-out}"
-mkdir -p bin "$OUT"
+mkdir -p bin "$OUT/teach" "$OUT/studio"
 CGO_ENABLED=1 go build -o bin/teach-linux ./cmd/teach-imgui
 CGO_ENABLED=1 go build -o bin/studio-linux ./cmd/camera-gui
 CGO_ENABLED=0 go build -o bin/camera ./cmd/camera
@@ -19,5 +19,5 @@ Xvfb :77 -screen 0 1700x1100x24 >/dev/null 2>&1 & XPID=$!
 trap 'kill $XPID 2>/dev/null; rm -rf "$XDG"' EXIT
 sleep 2
 export DISPLAY=:77 XDG_RUNTIME_DIR="$XDG" LIBGL_ALWAYS_SOFTWARE=1 AFVI_CAMERA_EXE="$PWD/bin/camera" AFVI_CAPTURES="$OUT/captures"
-./bin/teach-linux -selftest -ref "$REF" -out "$OUT/teach"
-./bin/studio-linux -selftest -ref "$REF" -out "$OUT/studio"
+./bin/teach-linux -selftest -ref "$REF" -out "$OUT/teach" ${SELFTEST_ARGS:-}
+./bin/studio-linux -selftest -ref "$REF" -out "$OUT/studio" ${SELFTEST_ARGS:-}

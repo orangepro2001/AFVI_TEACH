@@ -152,6 +152,7 @@ type App struct {
 	exitAfter time.Duration
 
 	cfgDlg    configDialog
+	chrome    chromeState
 	aboutOpen bool
 
 	live *liveLink // the live link to the other program (nil = off)
@@ -491,7 +492,11 @@ func (a *App) Frame() {
 		ApplyTheme(a.theme)
 		a.appliedTheme = a.theme
 	}
-	a.drawMenuBar()
+	vp0 := imgui.MainViewport()
+	if a.chrome.on {
+		a.drawCaption(vp0.Pos().X, vp0.Pos().Y, vp0.Size().X, a.captionHeight())
+	}
+	a.drawMenuBar(vp0.Pos(), vp0.Size().X)
 	if a.role == access.RoleAdmin && imgui.IsKeyPressedBoolV(imgui.KeyF11, false) { // same as the View menu item: admin only
 		a.toggleFocus()
 	}
@@ -506,7 +511,7 @@ func (a *App) Frame() {
 	}
 	tabH := imgui.FrameHeight() + 4
 
-	y := pos.Y + menuH
+	y := pos.Y + a.captionHeight() + menuH
 	toolbarY := y
 	y += toolH
 	tabsTop := y + 4
@@ -631,13 +636,39 @@ func (a *App) Frame() {
 	a.drawConfigDialog()
 	a.drawAbout()
 	a.drawLogin()
+	a.handleResizeEdges(pos.X, pos.Y, size.X, size.Y)
 }
 
 // drawMenuBar draws the Win32 main menu bar (File / View / Help).
-func (a *App) drawMenuBar() {
+func (a *App) drawMenuBar(pos imgui.Vec2, width float32) {
+	if a.chrome.on {
+		// custom chrome: the menu bar is a fixed window under the caption bar
+		place(pos.X, pos.Y+a.captionHeight(), width, imgui.FrameHeight())
+		imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(0, 0))
+		ok := imgui.BeginV("##menubar", nil, fixedWindowFlags()|imgui.WindowFlagsMenuBar|imgui.WindowFlagsNoScrollbar)
+		imgui.PopStyleVar()
+		if !ok {
+			imgui.End()
+			return
+		}
+		if !imgui.BeginMenuBar() {
+			imgui.End()
+			return
+		}
+		a.menuItems()
+		imgui.EndMenuBar()
+		imgui.End()
+		return
+	}
 	if !imgui.BeginMainMenuBar() {
 		return
 	}
+	a.menuItems()
+	imgui.EndMainMenuBar()
+}
+
+// menuItems records File / View / Help (inside a main menu bar or a window menu bar).
+func (a *App) menuItems() {
 	if imgui.BeginMenu(T("menu.file")) {
 		HotText(T("menu.file"), "")
 		if a.role == access.RoleAdmin {
@@ -712,7 +743,6 @@ func (a *App) drawMenuBar() {
 		HotText(T("menu.about"), "")
 		imgui.EndMenu()
 	}
-	imgui.EndMainMenuBar()
 }
 
 // drawAbout draws the modal About dialog.

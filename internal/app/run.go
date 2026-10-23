@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -44,6 +45,8 @@ func runProfile(profile Profile) {
 	exitAfter := flag.Duration("exitafter", 0, "close the window after this duration")
 	fontsize := flag.Float64("fontsize", defaultFontPx, "UI font size in pixels (10-28)")
 	linkAddr := flag.String("link", "", "live link address: the studio listens on it, the teach program dials it (default 127.0.0.1:47631, or AFVI_LINK); off disables the link")
+	chromeFlag := flag.Bool("chrome", runtime.GOOS == "windows", "draw the classic Win32 caption bar and resize edges instead of the OS window frame (default on Windows)")
+	nativeFrame := flag.Bool("nativeframe", false, "keep the OS window frame (overrides -chrome)")
 	login := flag.String("login", "", "start with a login, user:password (admin or operator; the studio accepts admin only)")
 	flag.Parse()
 	SetFontPx(float32(*fontsize))
@@ -106,6 +109,9 @@ func runProfile(profile Profile) {
 	})
 	be.SetBgColor(imgui.NewVec4(0.17, 0.17, 0.17, 1))
 	be.CreateWindow(profile.WindowTitle(), 1600, 1000)
+	if *chromeFlag && !*nativeFrame {
+		a.enableChrome()
+	}
 	if a.selftest != nil {
 		be.SetTargetFPS(1000)
 	} else {
@@ -175,7 +181,8 @@ func loop(a *App) {
 		// The GLFW backend force-enables multi-viewport after our hook; this fixed layout must
 		// stay inside the main window, otherwise edge panels pop out as separate OS windows.
 		io := imgui.CurrentIO()
-		io.SetConfigFlags(io.ConfigFlags() &^ imgui.ConfigFlagsViewportsEnable)
+		io.SetConfigFlags((io.ConfigFlags() &^ imgui.ConfigFlagsViewportsEnable) | imgui.ConfigFlagsNavEnableKeyboard)
+		a.be.SetWindowSizeLimits(chromeMinW, chromeMinH, -1, -1)
 	}
 	if a.selftest != nil && a.frame == 1 {
 		_ = a.be.SetSwapInterval(glfwbackend.GLFWSwapIntervalImmediate)
