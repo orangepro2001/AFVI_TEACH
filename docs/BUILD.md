@@ -306,6 +306,8 @@ Windows 不用开任何服务，只要 Win10/11 自带的 OpenSSH 客户端和�
 
 1. 服务器：`./scripts/build-wsl.sh --publish-latest ...`（或单独 `./scripts/publish-latest.sh [安装包]`）把安装包放到 `~/afvi-latest/`，保留最新 3 个，并写 `LATEST.txt`、`SHA256SUMS.txt`。
 2. Windows：`.\scripts\fetch-latest.ps1` 读取这两个文件，没有新版本就什么都不做，有新版本就 `scp` 下载、核对 sha256、放到桌面（OneDrive 重定向的桌面也可以）；日志在 `%LOCALAPPDATA%\AFVI\fetch-latest.log`。
-3. 自动化：`.\scripts\register-fetch-task.ps1` 注册当前用户的计划任务（登录时 + 每 10 分钟，`-IntervalMinutes` 可改，`-Unregister` 删除），不需要管理员权限，脚本副本放在 `%LOCALAPPDATA%\AFVI\`。
+3. 自动化：`.\scripts\register-fetch-task.ps1` 注册当前用户的计划任务（登录时 + 每 10 分钟，`-IntervalMinutes` 可改，`-Unregister` 会先停掉正在运行的那一次再删除），不需要管理员权限，脚本副本放在 `%LOCALAPPDATA%\AFVI\`。
+   - **不弹黑窗口**：任务的动作是 `wscript.exe`，它运行 `%LOCALAPPDATA%\AFVI\fetch-latest-hidden.vbs`，由这个 VBS 用隐藏窗口启动同一条 `powershell.exe -File fetch-latest.ps1` 命令行并等它结束。直接把 `powershell.exe` 当动作时，控制台窗口在 PowerShell 来得及执行 `-WindowStyle Hidden` 之前就被 Windows 建好并显示了，所以每 10 分钟闪一个黑窗口；`wscript.exe` 自己不是控制台程序，`sh.Run(cmd, 0, True)` 让子进程从创建起就是隐藏的，因此全程没有窗口，而且任务显示的运行时长和“上次运行结果”仍然是那次拉取自己的（0 成功 / 1 失败）。
+   - `fetch-latest.ps1` 用 `ssh -n`、`scp -B`，保证在没有控制台的进程里不会卡在输入提示上。
 
 这些 PowerShell 脚本在 Linux 上只做了语法层面的检查，没有在 Windows 上运行过。

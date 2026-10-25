@@ -44,7 +44,9 @@ if ((Test-Path -LiteralPath $logFile) -and ((Get-Item -LiteralPath $logFile).Len
 
 function Invoke-Ssh {
     param([string]$Command)
-    $out = & ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $SshHost $Command 2>&1
+    # -n: stdin from NUL, so ssh can never wait for console input. A run started from the scheduled
+    # task (wscript.exe -> powershell.exe, no console at all) would otherwise stall on a prompt.
+    $out = & ssh -n -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $SshHost $Command 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw ("ssh {0} failed (exit {1}): {2}" -f $SshHost, $LASTEXITCODE, ($out -join ' '))
     }
@@ -97,7 +99,8 @@ try {
     # 3. download to a temp file, verify, then move onto the desktop
     $tmp = Join-Path $stateDir ($name + '.part')
     Write-Log "downloading $name from ${SshHost}:$RemoteDir ..."
-    & scp -o BatchMode=yes -o ConnectTimeout=10 "${SshHost}:$RemoteDir/$name" $tmp 2>&1 | Out-Null
+    # -B batch mode: no passphrase/password prompts, so nothing ever waits for console input
+    & scp -B -o BatchMode=yes -o ConnectTimeout=10 "${SshHost}:$RemoteDir/$name" $tmp 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "scp failed (exit $LASTEXITCODE)"
     }
