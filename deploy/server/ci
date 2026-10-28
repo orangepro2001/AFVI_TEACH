@@ -302,7 +302,7 @@ publish_relhub() {
     token=$(tr -d ' \r\n' < "$RELHUB_TOKEN_FILE")
     # Both distributions go to the service, each under its own platform name, so an installed copy
     # and a green folder never offer each other's package. One failing does not stop the other.
-    local pair plat pkg
+    local pair plat pkg offered=0
     for pair in "$RELHUB_PLATFORM:$f" "${RELHUB_PLATFORM}-portable:$z"; do
         plat=${pair%%:*}
         pkg=${pair#*:}
@@ -313,17 +313,24 @@ publish_relhub() {
             "$script" "$pkg" --app "$RELHUB_APP" --platform "$plat" --channel "$RELHUB_CHANNEL" \
             --git-dir "$SRC" --git-rev "$sha" >> "$dir/build.log" 2>&1 || prc=$?
         case $prc in
-            0) log "relhub: $(basename "$pkg") offered on $RELHUB_APP/$plat ($RELHUB_URL)" ;;
+            0) log "relhub: $(basename "$pkg") offered on $RELHUB_APP/$plat ($RELHUB_URL)"; offered=1 ;;
             3) log "relhub: $(basename "$pkg") is not newer than the published $plat release, skipped" ;;
-            *) rc=1 ;;
+            *)
+                log "relhub: $plat failed (exit $prc), see $dir/build.log"
+                rc=1
+                ;;
         esac
     done
-    meta_update "$dir" '.relhub=($ok == 0)' --argjson ok "$rc"
     if [ "$rc" -ne 0 ]; then
-        log "relhub: publishing $(basename "$f") failed, see $dir/build.log (GitHub is unaffected)"
+        meta_update "$dir" '.relhub="failed"'
+        log "relhub: at least one package failed, see $dir/build.log (GitHub is unaffected)"
         return 0
     fi
-    log "relhub: $(basename "$f") offered on $RELHUB_APP/$RELHUB_PLATFORM ($RELHUB_URL)"
+    if [ "$offered" -eq 1 ]; then
+        meta_update "$dir" '.relhub="offered"'
+    else
+        meta_update "$dir" '.relhub="skipped"'
+    fi
     return 0
 }
 
