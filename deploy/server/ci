@@ -170,7 +170,8 @@ set_commit_status() {
 # upload_assets <release id> <dir> [names already on the release]
 upload_assets() {
     local id=$1 dir=$2 have=${3:-} f name
-    for f in "$dir"/AFVI-Teach-Setup-*.exe "$dir/SHA256SUMS.txt"; do
+    for f in "$dir"/AFVI-Teach-Setup-*.exe "$dir"/AFVI-Teach-Portable-*.zip "$dir/SHA256SUMS.txt"; do
+        [ -f "$f" ] || continue # an unmatched glob (a build without the green distribution)
         name=$(basename "$f")
         if [ -n "$have" ] && grep -qxF "$name" <<< "$have"; then
             continue
@@ -276,8 +277,9 @@ publish_relhub() {
         return 0
     fi
     f=$(ls "$dir"/AFVI-Teach-Setup-*.exe 2>/dev/null | head -1)
-    if [ -z "$f" ]; then
-        log "relhub: no installer in $dir, skipped"
+    z=$(ls "$dir"/AFVI-Teach-Portable-*.zip 2>/dev/null | head -1)
+    if [ -z "$f" ] && [ -z "$z" ]; then
+        log "relhub: no package in $dir, skipped"
         return 0
     fi
     # The scripts of the built commit, so the version rule and the publish step always match what
@@ -298,20 +300,25 @@ publish_relhub() {
     mv -f "$script.tmp" "$script"
     chmod +x "$script"
     token=$(tr -d ' \r\n' < "$RELHUB_TOKEN_FILE")
-    printf '=== relhub %s ===\n' "$(basename "$f")" >> "$dir/build.log"
-    if ! RELHUB_URL=$RELHUB_URL RELHUB_TOKEN=$token AFVI_CI_HOME=$CI_HOME \
-        "$script" "$f" --app "$RELHUB_APP" --platform "$RELHUB_PLATFORM" --channel "$RELHUB_CHANNEL" \
-        --git-dir "$SRC" --git-rev "$sha" >> "$dir/build.log" 2>&1; then
-        rc=1
-    fi
-    if [ "$rc" -eq 3 ]; then
-        # publish-relhub.sh exit 3: this build is not newer than what the service already offers,
-        # which happens when the same commit was published from the dev machine first.
-        meta_update "$dir" '.relhub="skipped"'
-        log "relhub: $(basename "$f") is not newer than the published release, skipped"
-        return 0
-    fi
-    meta_update "$dir" '.relhub=($ok == 1)' --argjson ok "$((1 - rc))"
+    # Both distributions go to the service, each under its own platform name, so an installed copy
+    # and a green folder never offer each other's package. One failing does not stop the other.
+    local pair plat pkg
+    for pair in "$RELHUB_PLATFORM:$f" "${RELHUB_PLATFORM}-portable:$z"; do
+        plat=${pair%%:*}
+        pkg=${pair#*:}
+        [ -n "$pkg" ] || continue
+        printf '=== relhub %s (%s) ===\n' "$(basename "$pkg")" "$plat" >> "$dir/build.log"
+        local prc=0
+        RELHUB_URL=$RELHUB_URL RELHUB_TOKEN=$token AFVI_CI_HOME=$CI_HOME \
+            "$script" "$pkg" --app "$RELHUB_APP" --platform "$plat" --channel "$RELHUB_CHANNEL" \
+            --git-dir "$SRC" --git-rev "$sha" >> "$dir/build.log" 2>&1 || prc=$?
+        case $prc in
+            0) log "relhub: $(basename "$pkg") offered on $RELHUB_APP/$plat ($RELHUB_URL)" ;;
+            3) log "relhub: $(basename "$pkg") is not newer than the published $plat release, skipped" ;;
+            *) rc=1 ;;
+        esac
+    done
+    meta_update "$dir" '.relhub=($ok == 0)' --argjson ok "$rc"
     if [ "$rc" -ne 0 ]; then
         log "relhub: publishing $(basename "$f") failed, see $dir/build.log (GitHub is unaffected)"
         return 0
@@ -341,8 +348,17 @@ finish_build() {
     local work=$1 dir=$2 files
     compgen -G "$work/dist/AFVI-Teach-Setup-*.exe" > /dev/null || return 1
     cp "$work"/dist/AFVI-Teach-Setup-*.exe "$dir/" || return 1
-    (cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe > SHA256SUMS.txt) || return 1
-    files=$(cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe | jq -R 'split("  ") | {sha256: .[0], name: .[1]}' | jq -s .) || return 1
+    # the green distribution is built by build-wsl.sh too; a build that produced none (an older
+    # commit, or --no-portable) is still a good build, it just ships the installer alone
+    if compgen -G "$work/dist/AFVI-Teach-Portable-*.zip" > /dev/null; then
+        cp "$work"/dist/AFVI-Teach-Portable-*.zip "$dir/" || return 1
+        (cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe AFVI-Teach-Portable-*.zip > SHA256SUMS.txt) || return 1
+    else
+        (cd "$dir" && sha256sum AFVI-Teach-Setup-*.exe > SHA256SUMS.txt) || return 1
+    fi
+    files=$(cd "$dir" && for pkg in AFVI-Teach-Setup-*.exe AFVI-Teach-Portable-*.zip; do
+        [ -f "$pkg" ] && sha256sum "$pkg"
+    done | jq -R 'split("  ") | {sha256: .[0], name: .[1]}' | jq -s .) || return 1
     meta_update "$dir" '.status="built" | .finished=$t | .finished_epoch=$e | .files=$files | .toolchain=$tc' \
         --arg t "$(now)" --argjson e "$(date +%s)" --argjson files "$files" \
         --arg tc "$(go version | cut -d' ' -f3), gcc $(x86_64-w64-mingw32-gcc -dumpversion)"

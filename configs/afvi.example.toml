@@ -44,3 +44,14 @@ address = "192.168.10.22"
 fm1 = 'Z:\FM1'
 fm2 = 'Z:\FM2'
 bm = 'Z:\BM'
+
+# Which face the window opens with: "teach" (teaching program), "studio" (camera studio) or
+# "ask" (the picker at startup). One window contains both; the toolbar switches at any time.
+# Left out or "ask" asks every start unless remember_last is set.
+#start_profile = "ask"
+
+# Remember the face the user switched to last (writes start_profile back into this file).
+#remember_last = true
+
+# Also open the other face next to this window at startup (the two are tiled side by side).
+#split_start = false

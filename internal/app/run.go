@@ -49,8 +49,18 @@ func runProfile(profile Profile) {
 	nativeFrame := flag.Bool("nativeframe", false, "keep the OS window frame (overrides -chrome)")
 	login := flag.String("login", "", "start with a login, user:password (admin or operator; the studio accepts admin only)")
 	updateFlag := flag.String("update", "", "update service base URL, or off (default "+updateURL+", or AFVI_UPDATE_URL)")
+	profileFlag := flag.String("profile", "", "which face to open: teach | studio | ask (default: the config's start_profile, else ask)")
+	splitPeer := flag.Bool("split-peer", false, "internal: this window was opened next to another one and must not tile again")
 	flag.Parse()
 	SetFontPx(float32(*fontsize))
+
+	// -profile wins over the configuration; without either, the window asks. A dedicated
+	// executable (camera-gui.exe calling RunStudio) is the tie-breaker, so an existing shortcut
+	// still opens what its name says.
+	startProfile := *profileFlag
+	if startProfile == "" {
+		startProfile = "" // filled from the config below
+	}
 
 	cfg, cfgPath, err := model.ResolveConfig(*cfgFlag, *ref, *machine)
 	if err != nil {
@@ -76,7 +86,29 @@ func runProfile(profile Profile) {
 	}
 	SetLang(ParseLang(langName))
 
-	a := NewApp(cfg, cfgPath, themeName, profile)
+	// The window starts as the profile asked for; the other face is one click away in the
+	// toolbar (profiles.go), and "ask" opens the picker over the first frame.
+	if startProfile == "" {
+		startProfile = cfg.StartProfile
+	}
+	if startProfile == "" {
+		startProfile = string(profile) // no preference anywhere: keep the executable's own face
+	}
+	face := profile
+	switch strings.ToLower(startProfile) {
+	case "studio":
+		face = ProfileStudio
+	case "teach":
+		face = ProfileTeach
+	case "ask":
+		face = profile
+	}
+	a := NewApp(cfg, cfgPath, themeName, face)
+	// "ask" opens the picker over the first frame; a self-test never asks, it walks the face its
+	// executable names (a modal would swallow the input of every step).
+	if strings.EqualFold(startProfile, "ask") && !*selftest {
+		a.pickProfile = true
+	}
 	a.exitAfter = *exitAfter
 	// The self-test drives the update dialog through its own step (a private server and key);
 	// a real check would pop a modal in the middle of the other steps.
@@ -85,7 +117,7 @@ func runProfile(profile Profile) {
 		updURL = "off"
 	}
 	a.setupUpdate(updURL)
-	startRole(flag.Visit, *login, *selftest, a, profile)
+	startRole(flag.Visit, *login, *selftest, a, face)
 	// The self-test walks the programs alone: it only opens the link when -link is given.
 	linkGiven := false
 	flag.Visit(func(f *flag.Flag) { linkGiven = linkGiven || f.Name == "link" })
@@ -119,7 +151,7 @@ func runProfile(profile Profile) {
 	if *chromeFlag && !*nativeFrame {
 		a.enableChrome() // a window hint: it must be set before the window is created
 	}
-	be.CreateWindow(profile.WindowTitle(), 1600, 1000)
+	be.CreateWindow(a.profile.WindowTitle(), 1600, 1000)
 	if a.selftest != nil {
 		be.SetTargetFPS(1000)
 	} else {
@@ -133,6 +165,10 @@ func runProfile(profile Profile) {
 		}
 	}
 	a.LoadModel(first)
+	if !*splitPeer && a.Cfg != nil && a.Cfg.SplitStart && !*selftest {
+		// "split_start = true": the other face opens next to this window right away
+		a.SplitWithPeer()
+	}
 	be.Run(func() { loop(a) })
 	a.closeLive()
 	a.closePanels()

@@ -41,7 +41,14 @@ type Config struct {
 	Theme    string // "light" | "dark" | ""
 	Lang     string // "zh" | "en" | "ko" | ""
 	Machines []Machine
-	BaseDir  string // not serialized: directory of the loaded file
+
+	// The window is one program with two faces (the teaching program and the camera
+	// studio); these say which face it opens with and whether the last choice is kept.
+	StartProfile string // "teach" | "studio" | "ask" ("" = ask)
+	RememberLast bool   // remember the face the user switched to last
+	SplitStart   bool   // also open the other face next to this one at startup
+
+	BaseDir string // not serialized: directory of the loaded file
 }
 
 // Default builds the simulated REFERENCE machine pointing at refRoot.
@@ -251,6 +258,15 @@ func (c *Config) Marshal() []byte {
 	b.WriteString("active = " + tomlString(c.Active) + "\n")
 	b.WriteString("theme = " + tomlString(c.Theme) + "\n")
 	b.WriteString("lang = " + tomlString(c.Lang) + "\n")
+	if c.StartProfile != "" {
+		b.WriteString("start_profile = " + tomlString(c.StartProfile) + "\n")
+	}
+	if c.RememberLast {
+		b.WriteString("remember_last = true\n")
+	}
+	if c.SplitStart {
+		b.WriteString("split_start = true\n")
+	}
 	for _, m := range c.Machines {
 		b.WriteString("\n[[machine]]\n")
 		b.WriteString("name = " + tomlString(m.Name) + "\n")
@@ -359,6 +375,12 @@ func Parse(data []byte) (*Config, error) {
 			cfg.Theme = val
 		case "lang":
 			cfg.Lang = val
+		case "start_profile":
+			cfg.StartProfile = val
+		case "remember_last":
+			cfg.RememberLast = val == "true" || val == "1"
+		case "split_start":
+			cfg.SplitStart = val == "true" || val == "1"
 		}
 	}
 	return cfg, nil

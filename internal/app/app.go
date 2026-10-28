@@ -130,6 +130,12 @@ type App struct {
 	tab       int
 	role      access.Role
 
+	// Both faces live in one window (profiles.go): each keeps its page set here from the first
+	// time it is shown, so switching back and forth loses nothing.
+	sets           map[Profile]*profileSet
+	pendingProfile Profile // a switch waiting for the login dialog
+	pickProfile    bool    // ask at startup which face to open (config: ask)
+
 	loginOpen   bool   // the login dialog is (or is about to be) open
 	loginUser   string // user field of the login dialog
 	loginPass   string // password field of the login dialog
@@ -155,11 +161,13 @@ type App struct {
 	chrome    chromeState
 	aboutOpen bool
 
-	live   *liveLink   // the live link to the other program (nil = off)
-	update updateState // in-program update check (off for an unstamped build)
+	live     *liveLink   // the live link to the other program (nil = off)
+	liveAddr string      // the address the link was started on, kept across profile switches
+	linkOn   bool        // the link was asked for (a self-test without -link keeps it off)
+	update   updateState // in-program update check (off for an unstamped build)
 
-	align  *AlignFlow   // taught alignment of the loaded model (teach program only, nil in the studio)
-	golden *goldenBoard // golden board of the loaded model: the inspection area (teach program only, nil in the studio)
+	align  *AlignFlow   // taught alignment of the loaded model (teach face only, nil until it is shown)
+	golden *goldenBoard // golden board of the loaded model: the inspection area (teach face only, nil until it is shown)
 }
 
 // NewApp builds the app state and panels; the window/backend is attached by main. The
@@ -178,22 +186,12 @@ func NewApp(cfg *config.Config, cfgPath string, theme string, profile Profile) *
 		timings:  map[string][]float64{},
 	}
 	a.Jobs = NewJobs(func(err error) { a.SetHint(T("common.error", "msg", err.Error())) })
-	// Both programs start with the light a real capture is taken with: red, green and blue
-	// all lit, so every channel has contrast (alignment templates, inspection parameters).
-	if profile == ProfileTeach {
-		a.align = newAlignFlow(a)
-		a.golden = newGoldenBoard(a)
-	}
 	sort.SliceStable(panelCtors, func(i, j int) bool { return panelCtors[i].order < panelCtors[j].order })
-	for _, c := range panelCtors {
-		if !c.allows(profile) {
-			continue
-		}
-		a.allPanels = append(a.allPanels, c.make(a))
-		a.allCtors = append(a.allCtors, c)
-	}
 	// Tests and the self-test expect the full interface; runProfile decides the start role.
 	a.role = access.RoleAdmin
+	// The face that starts is built now; the other one is built by its first switch.
+	set := a.profilePanels(profile)
+	a.allPanels, a.allCtors = set.allPanels, set.allCtors
 	a.rebuildPanels()
 	a.machineIdx = cfg.ActiveIndex()
 	m := a.CurrentMachine()
@@ -321,6 +319,10 @@ func (a *App) TryLogin(user, password string) bool {
 	a.loginErr = ""
 	a.loginUser = ""
 	a.loginPass = ""
+	// a switch that was waiting for the admin login (to reach the studio) happens now
+	if pending := a.pendingProfile; pending != ProfileNone {
+		a.SwitchProfile(pending)
+	}
 	return true
 }
 
@@ -638,6 +640,7 @@ func (a *App) Frame() {
 	a.drawConfigDialog()
 	a.drawAbout()
 	a.drawUpdateDialog()
+	a.drawProfilePicker()
 	a.drawLogin()
 	a.handleResizeEdges(pos.X, pos.Y, size.X, size.Y)
 }
@@ -839,6 +842,9 @@ func (a *App) drawToolbar(x, y, w, h float32) {
 	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, imgui.NewVec2(8, 4))
 	imgui.BeginV("##toolbar", nil, fixedWindowFlags()|imgui.WindowFlagsNoScrollbar)
 	imgui.PopStyleVar()
+
+	// which program this window is, before anything else: the two faces share one entry
+	a.drawProfileSwitch()
 
 	if a.role == access.RoleAdmin {
 		imgui.AlignTextToFramePadding()

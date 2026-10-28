@@ -41,6 +41,7 @@
 | `-fontsize <10-28>` | 界面字号（像素，默认 16；布局常量按字号缩放） |
 | `-link <地址>` | 实时联机地址：工作室监听它，教学程序拨它；默认 `127.0.0.1:47631`；只写端口号等于 `127.0.0.1:<端口>`；`off` 关闭（见 [LINK.md](LINK.md)） |
 | `-login user:password` | 启动时登录（在第一个冒号处分割）：`admin:1` 进管理员界面，`operator:` 进操作员界面；工作室只接受管理员；无效时 stderr 报错、退出码 2（见 [ROLES.md](ROLES.md)） |
+| `-profile teach\|studio\|ask` | 启动哪个界面（默认取 `afvi.toml` 的 `start_profile`，都没有则询问；见「一个入口，两个界面」） |
 | `-update <地址>` | 更新服务地址（含前缀，如 `https://host/release`）；`off` 关闭程序内更新检查（见 [UPDATE.md](UPDATE.md)） |
 | `-selftest` | 自测模式：遍历所有页签、主题与语言，保存截图与指标后退出 |
 | `-out <目录>` | 自测输出目录 |
@@ -49,6 +50,17 @@
 环境变量 `AFVI_CAMERA_EXE` 可指定 `camera.exe` 的路径；未设置时按教学程序 exe 同级、PATH 顺序查找。环境变量 `AFVI_LINK` 等价于 `-link`（命令行优先）。`-selftest` 默认不联机，显式给出 `-link` 才联机。
 
 配置文件查找顺序：`-config <文件>` → 环境变量 `AFVI_CONFIG` → exe 同级的 `afvi.toml` → 工作目录的 `afvi.toml`。没有任何配置文件时，应用按旧的 reference 查找顺序（`-ref` → 环境变量 `AFVI_REFERENCE_DIR` → exe 目录及向上 5 级的 `reference/` → 工作目录及向上 5 级的 `reference/`）模拟一台名为 `REFERENCE`（地址 `localhost`）的机台。
+
+## 一个入口，两个界面
+
+本程序一个窗口里同时包含**教学程序**和**相机工作室**：
+
+- **启动时**：`-profile teach|studio|ask` 决定开哪个界面；`afvi.toml` 里 `start_profile = "teach" | "studio" | "ask"` 是同样的意思。两边都没有时打开**选择对话框**（勾「记住我的选择」会写进 `start_profile` 并打开 `remember_last`）。
+- **运行中**：工具栏最左端的 `教学程序` / `相机工作室` 是开关，随时切换，**不重启、不丢工作**（工作室里画好的缺陷、教学页的 ROI 与金板都还在，两套页面各自独立保存）。切到相机工作室需要管理员身份，没有就弹出登录框，登录成功后自动切过去。
+- **并排**：`⇔ 并排` 把另一个界面作为**独立窗口**打开，并让 Windows 把两个窗口左右各占半个屏幕（两个窗口各自可操作，之间的实时联机照旧：工作室监听、教学程序拨号）。`split_start = true` 可以让程序一启动就这么摆好。
+- 关掉并排的其中一个窗口即可，另一个不受影响。
+
+两个 exe（`teach-imgui.exe` 默认教学、`camera-gui.exe` 默认工作室）用同一份代码，只是默认界面不同；老的快捷方式照样能用。发行形态（安装版 / 绿色版）见 [PORTABLE.md](PORTABLE.md)。
 
 ## 操作员工作流
 

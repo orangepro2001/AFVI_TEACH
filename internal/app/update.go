@@ -55,6 +55,7 @@ type updateState struct {
 	dlDone      atomic.Int64
 	dlTotal     atomic.Int64
 	installerAt string // verified package on disk
+	portable    bool   // this program runs from a green (no-install) folder
 	ready       bool   // installerAt holds the offered package
 	dlErr       string
 
@@ -87,6 +88,12 @@ func (a *App) setupUpdate(urlOverride string) {
 		// An unstamped build cannot name itself, so it must not decide that it is old.
 		u.off, u.offWhy = true, "update.off.dev"
 		return
+	}
+	// The green distribution is a different package (a zip over its own folder), so it asks the
+	// service under its own platform name: the two never offer each other's download.
+	u.portable = isPortable()
+	if u.portable {
+		u.cfg.Platform = portablePlatform
 	}
 	client, err := updater.New(u.cfg)
 	if err != nil {
@@ -228,7 +235,13 @@ func (a *App) requestInstall() {
 	if !u.ready || u.installing || u.installerAt == "" {
 		return
 	}
-	if err := launchInstaller(u.installerAt); err != nil {
+	var err error
+	if u.portable {
+		err = portableInstall(u.installerAt)
+	} else {
+		err = launchInstaller(u.installerAt)
+	}
+	if err != nil {
 		u.dlErr = err.Error()
 		a.SetHint(T("update.err.install", "msg", err.Error()))
 		return
@@ -258,6 +271,8 @@ func (a *App) updateSummary() string {
 	switch {
 	case u.off:
 		return T(u.offWhy)
+	case u.ready && u.portable:
+		return T("update.ready.portable", "version", u.offer.VersionName)
 	case u.checking:
 		return T("update.checking")
 	case u.ready:

@@ -20,7 +20,8 @@
 #   --desktop          copy the installer to the Windows desktop (sha256 checked)
 #   --desktop-dir DIR  copy it to DIR instead (implies --desktop)
 #   --publish-latest   copy the installer to ~/afvi-latest for scripts/fetch-latest.ps1 on the Windows PC
-#   --publish-relhub   publish the installer to the release-publish update service (scripts/publish-relhub.sh)
+#   --publish-relhub   publish the installer and the portable zip to the update service (scripts/publish-relhub.sh)
+#   --no-portable      do not build the green distribution dist/AFVI-Teach-Portable-<version>.zip
 #   --fetch            wait for the build server's installer of the pushed commit (GitHub Release nightly,
 #                      up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 #
@@ -46,6 +47,7 @@ DESKTOP_DIR=""
 FETCH=false
 PUBLISH_LATEST=false
 PUBLISH_RELHUB=false
+PORTABLE=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -100,6 +102,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --publish-relhub)
             PUBLISH_RELHUB=true
+            shift
+            ;;
+        --no-portable)
+            PORTABLE=false
             shift
             ;;
         *)
@@ -269,6 +275,21 @@ elif [ "$DESKTOP" = true ]; then
     ./scripts/ship-wsl.sh desktop "${ship_args[@]}"
 fi
 
+# --- 5b. green (no-install) distribution -------------------------------------
+PORTABLE_ZIP=""
+if [ "$PORTABLE" = true ]; then
+    echo "==> portable distribution (scripts/package-portable.sh --no-build)"
+    port_args=(--no-build)
+    if [ -n "$VERSION" ]; then
+        port_args+=(--version "$VERSION")
+    fi
+    if [ -n "$REFERENCE" ]; then
+        port_args+=(--reference "$REFERENCE")
+    fi
+    ./scripts/package-portable.sh "${port_args[@]}"
+    PORTABLE_ZIP=$(tr -d ' \r\n' < dist/.last-portable)
+fi
+
 if [ "$PUBLISH_LATEST" = true ]; then
     if [ "$INSTALLER" != true ]; then
         echo "ERROR: --publish-latest needs the installer (drop --no-installer)"
@@ -285,6 +306,10 @@ if [ "$PUBLISH_RELHUB" = true ]; then
     fi
     echo "==> publish the installer to the update service (scripts/publish-relhub.sh)"
     ./scripts/publish-relhub.sh
+    if [ -n "$PORTABLE_ZIP" ] && [ -f "$PORTABLE_ZIP" ]; then
+        echo "==> publish the portable zip to the update service (platform win-x64-portable)"
+        ./scripts/publish-relhub.sh "$PORTABLE_ZIP" --platform win-x64-portable
+    fi
 fi
 
 echo "OK"

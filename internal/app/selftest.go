@@ -2463,6 +2463,7 @@ func NewSelftest(a *App, out string) *Selftest {
 	s.steps = append(s.steps, s.goldenEndToEnd()...)
 	s.steps = append(s.steps, s.userMaskSteps()...)
 	s.steps = append(s.steps, s.focusSteps()...)
+	s.steps = append(s.steps, s.profileSteps()...)
 	s.steps = append(s.steps, s.updateSteps()...)
 	s.steps = append(s.steps, s.roleSteps()...)
 	s.steps = append(s.steps, s.studioRoleSteps()...)
@@ -2508,6 +2509,7 @@ var studioOnlySteps = map[string]bool{
 
 var teachOnlySteps = map[string]bool{
 	"teach-start":                  true,
+	"profile-switch":               true,
 	"align-dark-zh":                true,
 	"interact-align-roi":           true,
 	"align-overlay":                true,

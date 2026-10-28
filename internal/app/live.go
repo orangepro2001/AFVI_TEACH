@@ -84,6 +84,7 @@ func (a *App) StartLive(addr string) {
 	if a.live != nil || addr == "" {
 		return
 	}
+	a.liveAddr, a.linkOn = addr, true
 	l := &liveLink{addr: addr}
 	if a.profile == ProfileStudio {
 		srv, err := link.Listen(addr, studioProducer)

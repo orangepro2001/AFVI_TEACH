@@ -11,6 +11,8 @@ const (
 	// ProfileStudio is the camera studio: light tab and defect-synthesis tab; it writes
 	// captures (snap.json plus PNGs) by running the camera program.
 	ProfileStudio Profile = "studio"
+	// ProfileNone is "no face": the zero value, used for "no switch is pending".
+	ProfileNone Profile = ""
 )
 
 // Window titles are also used by the self-test to find the window for screenshots.

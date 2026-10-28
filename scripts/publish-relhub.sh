@@ -77,7 +77,10 @@ gitr() { git -C "$GIT_ROOT" "$@"; }
 # --- the installer ---------------------------------------------------------------------------
 
 if [[ -z $SRC ]]; then
-    if [[ -s dist/.last-installer ]]; then
+    if [[ $PLATFORM == win-x64-portable && -s dist/.last-portable ]]; then
+        # the green distribution has its own package (scripts/package-portable.sh)
+        SRC=$(tr -d ' \r\n' < dist/.last-portable)
+    elif [[ -s dist/.last-installer ]]; then
         SRC=$(tr -d ' \r\n' < dist/.last-installer)
     else
         SRC=$(ls -t dist/AFVI-Teach-Setup-*.exe 2>/dev/null | head -1 || true)
