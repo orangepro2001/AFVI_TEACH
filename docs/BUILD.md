@@ -170,6 +170,8 @@ token 只是**发布**用的（服务端只存它的 SHA-256，丢了就 `relhub
 
 所以 `v0.1.0-rc2` 之后第 11 个提交是 `0.1.11` / code 111；下一个 tag `v0.1.1` 是 `0.1.100` / code 200，比它高。tag 之间超过 100 个提交就会撞号，此时脚本会以 `versionCode … is not higher` 拒绝发布并提示打 tag——**打一个新 tag 即可**，不要手工填 code。
 
+**构建与发布的号必须一致**：`scripts/version.sh` 是唯一实现，`build-wsl.sh` 用它把 `Name`/`Code` 通过 `-ldflags -X` 写进两个 GUI，`publish-relhub.sh` 用同一规则发布。`--commit` 是**先构建后提交**，所以这时戳的是"这次提交之后"的号（少一个提交会被少算一级，装完就会立刻再提示一次更新）；不加 `--commit` 的构建和构建服务器上的构建都是干净的检出，直接用当前提交的号。
+
 **安全性**：`relhub` 的 `stable` 清单带 Ed25519 签名，应用应当固定公钥（`relhub keys` 打印）。目前下载侧只有 sha256 校验（HTTPS + Tailscale 网络），签名校验留给路线 B 的 Go SDK 客户端。
 
 **后续（路线 B，还没做）**：把 `relhub/pkg/relclient` 引入程序，在 `teach-imgui` 里加一个 `internal/updater`（启动时后台 `Check`，UI 里提示，`Download` 断点续传并校验签名，然后调 `setup.exe -silent` 升级），这样"检查 → 下载 → 安装"全在应用内完成，不再依赖 Windows 侧的脚本与定时任务。代价是 `go.mod` 多一个 `require relhub`（配 `replace` 指向本机路径或 `go mod vendor`），并且构建服务器必须先拿到那份源码；路线 A 的发布端与它共用同一个 app、同一套版号规则。

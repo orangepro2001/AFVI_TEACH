@@ -29,6 +29,7 @@ dist/
 # Self-test outputs
 selftest-out/
 selftest-output/
+selftest-*/
 snap-out/
 *-metrics.json
 *.png

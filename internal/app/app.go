@@ -155,7 +155,8 @@ type App struct {
 	chrome    chromeState
 	aboutOpen bool
 
-	live *liveLink // the live link to the other program (nil = off)
+	live   *liveLink   // the live link to the other program (nil = off)
+	update updateState // in-program update check (off for an unstamped build)
 
 	align  *AlignFlow   // taught alignment of the loaded model (teach program only, nil in the studio)
 	golden *goldenBoard // golden board of the loaded model: the inspection area (teach program only, nil in the studio)
@@ -488,6 +489,7 @@ func (a *App) Frame() {
 		}
 	}
 	a.tickPanels()
+	a.tickUpdate()
 	if a.appliedTheme != a.theme {
 		ApplyTheme(a.theme)
 		a.appliedTheme = a.theme
@@ -635,6 +637,7 @@ func (a *App) Frame() {
 	}
 	a.drawConfigDialog()
 	a.drawAbout()
+	a.drawUpdateDialog()
 	a.drawLogin()
 	a.handleResizeEdges(pos.X, pos.Y, size.X, size.Y)
 }
@@ -737,6 +740,11 @@ func (a *App) menuItems() {
 	}
 	if imgui.BeginMenu(T("menu.help")) {
 		HotText(T("menu.help"), "")
+		if imgui.MenuItemBoolV(T("menu.checkUpdate"), "", false, true) {
+			a.openUpdateDialog()
+		}
+		HotText(T("menu.checkUpdate"), "")
+		imgui.Separator()
 		if imgui.MenuItemBoolV(T("menu.about"), "", false, true) {
 			a.aboutOpen = true
 		}

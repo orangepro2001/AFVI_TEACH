@@ -73,6 +73,7 @@ func run(root, bin, stub, out, version, reference string) error {
 		"docs/INSPECT_RULES.md":   filepath.Join(root, "docs", "INSPECT_RULES.md"),
 		"docs/SCENARIO.md":        filepath.Join(root, "docs", "SCENARIO.md"),
 		"docs/REFERENCE_SETUP.md": filepath.Join(root, "docs", "REFERENCE_SETUP.md"),
+		"docs/UPDATE.md":          filepath.Join(root, "docs", "UPDATE.md"),
 	}
 	names := make([]string, 0, len(docs))
 	for n := range docs {

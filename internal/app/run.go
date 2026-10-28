@@ -48,6 +48,7 @@ func runProfile(profile Profile) {
 	chromeFlag := flag.Bool("chrome", runtime.GOOS == "windows", "draw the classic Win32 caption bar and resize edges instead of the OS window frame (default on Windows)")
 	nativeFrame := flag.Bool("nativeframe", false, "keep the OS window frame (overrides -chrome)")
 	login := flag.String("login", "", "start with a login, user:password (admin or operator; the studio accepts admin only)")
+	updateFlag := flag.String("update", "", "update service base URL, or off (default "+updateURL+", or AFVI_UPDATE_URL)")
 	flag.Parse()
 	SetFontPx(float32(*fontsize))
 
@@ -77,6 +78,13 @@ func runProfile(profile Profile) {
 
 	a := NewApp(cfg, cfgPath, themeName, profile)
 	a.exitAfter = *exitAfter
+	// The self-test drives the update dialog through its own step (a private server and key);
+	// a real check would pop a modal in the middle of the other steps.
+	updURL := *updateFlag
+	if *selftest && updURL == "" {
+		updURL = "off"
+	}
+	a.setupUpdate(updURL)
 	startRole(flag.Visit, *login, *selftest, a, profile)
 	// The self-test walks the programs alone: it only opens the link when -link is given.
 	linkGiven := false

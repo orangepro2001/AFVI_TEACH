@@ -2463,6 +2463,7 @@ func NewSelftest(a *App, out string) *Selftest {
 	s.steps = append(s.steps, s.goldenEndToEnd()...)
 	s.steps = append(s.steps, s.userMaskSteps()...)
 	s.steps = append(s.steps, s.focusSteps()...)
+	s.steps = append(s.steps, s.updateSteps()...)
 	s.steps = append(s.steps, s.roleSteps()...)
 	s.steps = append(s.steps, s.studioRoleSteps()...)
 	s.steps = filterSteps(s.steps, a.profile)

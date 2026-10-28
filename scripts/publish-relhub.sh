@@ -8,14 +8,10 @@
 # Default installer: dist/.last-installer (written by package-wsl.sh), else the newest
 # dist/AFVI-Teach-Setup-*.exe.
 #
-# Version rule (--version / --code override it):
-#   base  = the newest v* tag reachable from HEAD, its MAJOR.MINOR.PATCH taken as-is
-#           (a prerelease suffix such as -rc2 only names the tag, not the version)
-#   N     = commits since that tag (0 when HEAD is the tag itself)
-#   patch = tagPatch*100 + N        ->  v0.1.0-rc2 + 11 commits  =  0.1.11
-#   code  = major*10000 + minor*100 + patch                        =  10111
-# So every commit gets a higher code than the previous one, and the next tag v0.1.1 (code 10100
-# at N=0, 10101, ...) only overtakes it if fewer than 100 commits were built since v0.1.0.
+# Version rule (--version / --code override it): see scripts/version.sh, the single place the
+# rule lives - build-wsl.sh stamps the same name and code into the binaries. In short: the newest
+# v* tag plus its commits, patch = tagPatch*100 + N, code = MAJOR*10000 + MINOR*100 + patch, so
+# v0.1.0-rc2 + 11 commits is 0.1.11 / code 111 and the next tag v0.1.1 is 0.1.100 / code 200.
 # relhub refuses a code that is not higher than the newest published one; this script checks that
 # beforehand and stops with the tag advice instead of letting the upload fail.
 #
@@ -29,6 +25,10 @@
 # uploaded and the script exits 0. Nothing else in the release history is touched.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# The version rule lives in scripts/version.sh, shared with build-wsl.sh: the built binaries
+# stamp the same name and code into themselves, so a client and this script can never disagree.
+# shellcheck source=scripts/version.sh
+. "$(dirname "${BASH_SOURCE[0]}")/version.sh"
 
 APP="afvi-teach"
 PLATFORM="win-x64"
@@ -89,38 +89,9 @@ SIZE=$(stat -c %s "$SRC")
 
 # --- version and versionCode -----------------------------------------------------------------
 
-# tag_version_base: the newest reachable v* tag, and how many commits sit on top of it.
-tag_version_base() {
-    local desc base n
-    if ! desc=$(gitr describe --tags --match 'v*' "$GIT_REV" 2>/dev/null); then
-        printf '0.0.0 0\n'
-        return
-    fi
-    if [[ $desc =~ ^(.*)-([0-9]+)-g[0-9a-f]+$ ]]; then
-        base=${BASH_REMATCH[1]}
-        n=${BASH_REMATCH[2]}
-    else
-        base=$desc
-        n=0
-    fi
-    # v0.1.0-rc2 -> 0.1.0: the prerelease suffix belongs to the tag name, not to the version.
-    base=${base#v}
-    base=${base%%-*}
-    printf '%s %s\n' "$base" "$n"
-}
-
-if [[ -z $VERSION || -z $CODE ]]; then
-    read -r tag_base n <<< "$(tag_version_base)"
-    [[ $tag_base =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] \
-        || die "cannot derive a version from the newest v* tag ('$tag_base' is not MAJOR.MINOR.PATCH); pass --version and --code"
-    major=${BASH_REMATCH[1]}
-    minor=${BASH_REMATCH[2]}
-    patch=${BASH_REMATCH[3]}
-    patch=$(( patch * 100 + n ))
-    # relhub stores MAJOR*10000 + MINOR*100 + PATCH as the code; keep the name consistent with it.
-    [[ -z $VERSION ]] && VERSION="${major}.${minor}.${patch}"
-    [[ -z $CODE ]] && CODE=$(( major * 10000 + minor * 100 + patch ))
-fi
+export AFVI_GIT_DIR=$GIT_ROOT AFVI_GIT_REV=$GIT_REV
+[[ -z $VERSION ]] && VERSION=$(afvi_version_name)
+[[ -z $CODE ]] && CODE=$(afvi_version_code)
 [[ $CODE =~ ^[0-9]+$ ]] || die "--code must be a number, got '$CODE'"
 [[ $CODE -ge 1 ]] || die "--code must be at least 1 (the code the Windows PC compares against)"
 

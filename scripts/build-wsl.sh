@@ -30,6 +30,8 @@ set -euo pipefail
 
 # Always run from the project root
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=scripts/version.sh
+. scripts/version.sh
 
 SELFTEST=false
 OUT="selftest-out"
@@ -157,9 +159,25 @@ fi
 # The GUIs link the MinGW runtime statically (-extldflags=-static): otherwise they import
 # libgcc_s_seh-1.dll and libstdc++-6.dll, which a Windows without MinGW does not have, and the
 # installer (scripts/package-wsl.sh) refuses such executables.
+# The release identity is stamped here so the program can compare itself with the update
+# service: same rule as scripts/publish-relhub.sh (scripts/version.sh is the only copy of it).
+APP_VERSION=$(afvi_version_name)
+APP_CODE=$(afvi_version_code)
+# --commit commits after the build, so the tree being compiled is one commit short of the one
+# that will contain these binaries. Stamp the version that commit will have, or the release
+# (which publish-relhub.sh derives from the new HEAD) would be one ahead of the exe inside it
+# and every update would be offered again after installing it.
+if [ "$COMMIT_MSG" != "" ] && [ -n "$(git status --porcelain)" ]; then
+    APP_CODE=$((APP_CODE + 1))
+    APP_VERSION=$(awk -F. -v OFS=. '{ $NF = $NF + 1; print }' <<< "$APP_VERSION")
+    echo "==> release identity $APP_VERSION (code $APP_CODE), one commit ahead: --commit builds before it commits"
+fi
+echo "==> release identity $APP_VERSION (code $APP_CODE)"
+STAMP="-X afvi/teach-imgui/internal/version.Name=$APP_VERSION -X afvi/teach-imgui/internal/version.CodeText=$APP_CODE"
+
 echo "==> go build (cross-compile to Windows)"
 mkdir -p bin
-go build -ldflags "-s -w -H windowsgui -extldflags=-static" -o bin/teach-imgui.exe ./cmd/teach-imgui
+go build -ldflags "-s -w -H windowsgui -extldflags=-static $STAMP" -o bin/teach-imgui.exe ./cmd/teach-imgui
 
 exe="bin/teach-imgui.exe"
 if [ -f "$exe" ]; then
@@ -172,7 +190,7 @@ fi
 
 # --- 4b. camera-gui (studio, cgo like the teach program) ---------------------
 echo "==> go build camera-gui (cross-compile to Windows)"
-go build -ldflags "-s -w -H windowsgui -extldflags=-static" -o bin/camera-gui.exe ./cmd/camera-gui
+go build -ldflags "-s -w -H windowsgui -extldflags=-static $STAMP" -o bin/camera-gui.exe ./cmd/camera-gui
 
 studio_exe="bin/camera-gui.exe"
 if [ -f "$studio_exe" ]; then
