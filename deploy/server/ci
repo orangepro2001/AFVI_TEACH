@@ -280,23 +280,23 @@ publish_relhub() {
         log "relhub: no installer in $dir, skipped"
         return 0
     fi
-    # the scripts of the built commit, so the version rule and the publish step always match
-    # what was built; publish-relhub.sh sources version.sh next to itself.
-    script=$STATE/scripts/publish-relhub.sh
-    mkdir -p "$STATE/scripts" || return 0
+    # The scripts of the built commit, so the version rule and the publish step always match what
+    # was built. publish-relhub.sh sources version.sh from its own directory, so both land in
+    # $STATE itself, side by side.
+    script=$STATE/publish-relhub.sh
     if ! git -C "$SRC" show "$sha:scripts/publish-relhub.sh" > "$script.tmp" 2> /dev/null; then
         rm -f "$script.tmp"
         log "relhub: ${sha:0:7} has no scripts/publish-relhub.sh, skipped"
         return 0
     fi
+    if ! git -C "$SRC" show "$sha:scripts/version.sh" > "$STATE/version.sh.tmp" 2> /dev/null; then
+        rm -f "$script.tmp" "$STATE/version.sh.tmp"
+        log "relhub: ${sha:0:7} has no scripts/version.sh, skipped"
+        return 0
+    fi
+    mv -f "$STATE/version.sh.tmp" "$STATE/version.sh"
     mv -f "$script.tmp" "$script"
     chmod +x "$script"
-    # version.sh came in with the derived-version change; older commits do not have it
-    if git -C "$SRC" show "$sha:scripts/version.sh" > "$STATE/scripts/version.sh.tmp" 2> /dev/null; then
-        mv -f "$STATE/scripts/version.sh.tmp" "$STATE/scripts/version.sh"
-    else
-        rm -f "$STATE/scripts/version.sh.tmp"
-    fi
     token=$(tr -d ' \r\n' < "$RELHUB_TOKEN_FILE")
     printf '=== relhub %s ===\n' "$(basename "$f")" >> "$dir/build.log"
     if ! RELHUB_URL=$RELHUB_URL RELHUB_TOKEN=$token AFVI_CI_HOME=$CI_HOME \
@@ -304,7 +304,14 @@ publish_relhub() {
         --git-dir "$SRC" --git-rev "$sha" >> "$dir/build.log" 2>&1; then
         rc=1
     fi
-    meta_update "$dir" '.relhub=$ok' --argjson ok "$((1 - rc))"
+    if [ "$rc" -eq 3 ]; then
+        # publish-relhub.sh exit 3: this build is not newer than what the service already offers,
+        # which happens when the same commit was published from the dev machine first.
+        meta_update "$dir" '.relhub="skipped"'
+        log "relhub: $(basename "$f") is not newer than the published release, skipped"
+        return 0
+    fi
+    meta_update "$dir" '.relhub=($ok == 1)' --argjson ok "$((1 - rc))"
     if [ "$rc" -ne 0 ]; then
         log "relhub: publishing $(basename "$f") failed, see $dir/build.log (GitHub is unaffected)"
         return 0

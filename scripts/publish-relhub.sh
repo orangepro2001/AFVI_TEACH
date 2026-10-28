@@ -139,9 +139,13 @@ if api GET "$list_path"; then
         exit 0
     fi
     if [[ $CODE -le $newest_code ]]; then
-        die "versionCode $CODE is not higher than the newest published $newest_code.
-       Build after tagging (git tag v$VERSION && git push origin v$VERSION) or pass --code <higher>.
-       See the version rule at the top of this script."
+        # Exit 3, not 1: this is a decision (the build is not newer than what is published, e.g.
+        # the same commit was published from the dev machine first), not a failure of the upload.
+        printf 'ERROR: versionCode %s is not higher than the newest published %s.\n' "$CODE" "$newest_code" >&2
+        printf '       Build after tagging (git tag v%s && git push origin v%s) or pass --code <higher>.\n' \
+            "$VERSION" "$VERSION" >&2
+        printf '       See the version rule at the top of this script.\n' >&2
+        exit 3
     fi
 else
     case $HTTP_CODE in
