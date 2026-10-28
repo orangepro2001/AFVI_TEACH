@@ -25,8 +25,9 @@
 ├── README.txt             这棵树的说明（install.sh 写入）
 ├── bin/ci                 驱动脚本，唯一的程序
 ├── etc/
-│   ├── ci.conf            设置：仓库、保留数量、超时、重试
-│   └── github-token       发布用的 GitHub token，权限 600（ci set-token 写入）
+│   ├── ci.conf            设置：仓库、保留数量、超时、重试、更新服务地址
+│   ├── github-token       发布用的 GitHub token，权限 600（ci set-token 写入）
+│   └── relhub-token       可选：更新服务（relhub）的发布 token，权限 600；没有就跳过那一步
 ├── out/                   结果。一个构建一个文件夹，别的什么都不放
 │   ├── main/<日期>-<sha>/     main 的每次构建，保留最新 10 个
 │   ├── tags/<tag>/            每个 v* tag 的构建，永久保留
@@ -39,9 +40,23 @@
 └── state/lock             同一时间只跑一个构建
 ```
 
-`meta.json` 记录这次构建的一切：提交、版本号、状态（`building` / `built` / `failed` / `interrupted` / `baseline`）、尝试次数、开始和结束时间、安装包的 sha256、工具链版本、是否已发布和 Release 地址。服务器重启后靠它接着干，没有别的状态文件。
+`meta.json` 记录这次构建的一切：提交、版本号、状态（`building` / `built` / `failed` / `interrupted` / `baseline`）、尝试次数、开始和结束时间、安装包的 sha256、工具链版本、是否已发布、Release 地址，以及是否已发到更新服务（`relhub`）。服务器重启后靠它接着干，没有别的状态文件。
 
 定时器和服务的单元在 `~/.config/systemd/user/afvi-ci.{service,timer}`（用户级，不需要 root；该账户已开启 linger，没人登录也照常运行）。
+
+## 更新服务（可选）
+
+GitHub Release 之外，构建成功后安装包还会发到本机的更新服务 `release-publish`（`relhub`），让装好的程序自己检查更新时能找到它。这一步**按 `etc/relhub-token` 是否存在开关**：
+
+```bash
+ls -l ~/ci/afvi-teach/etc/relhub-token        # 有：发布到 relhub；没有：跳过这一步，GitHub 照常
+afvi-ci/bin/ci status | grep relhub          # 看开关与目标地址/应用/渠道
+```
+
+- 地址、应用、平台、渠道在 `etc/ci.conf` 里可覆盖（`RELHUB_URL`、`RELHUB_APP`、`RELHUB_PLATFORM`、`RELHUB_CHANNEL`），默认 `http://127.0.0.1:18790/release`、`afvi-teach`、`win-x64`、`stable`。
+- 版本号规则在 `scripts/publish-relhub.sh` 里（tag + 提交数，见 [BUILD.md](BUILD.md#更新服务release-publish--relhub)）；ci 用的是**那次构建对应提交里的脚本**，所以规则永远和构建内容一致。
+- 结果记在 `meta.json` 的 `.relhub`（1 成功，0 失败）；失败只写日志（`out/.../build.log` 末尾的 `=== relhub ... ===`），不影响 GitHub 发布，`ci publish main` / `ci publish <tag>` 会把两边都重发一次。
+- token 只是发布凭据，下载侧公开、不需要 token。
 
 ## 一次性准备
 
@@ -102,6 +117,7 @@ git push origin v1.0.0       # 服务器构建后发布 Release「v1.0.0」；ta
 
 - **main**：每次发现新的 HEAD 就构建，成功后删除旧的 `nightly`（连 tag）并在这次提交上重建，所以 Release 页上只有最新一次 main。构建进行中又有新提交，旧的那个不会发布，随后构建新的。构建失败不会动现有的 `nightly`。
 - **v\* tag**：每个 tag 构建一次并发布成自己的 Release（自动生成发布说明）。**tag 被当作不可变的**：已经构建过的 tag 之后被改指别处，服务器不会重新构建；已存在的 Release 不会被覆盖，只补上缺的文件。需要重做就用 `ci build <tag> --force`。
+- **更新服务**：GitHub 发布成功后（且 `etc/relhub-token` 存在时）接着把同一个安装包发到 relhub；同一个 sha256 已经在该渠道上时是空操作，并发/重试都不会重复上传。relhub 拒绝不递增的 `versionCode`，tag 之间超过 100 个提交需要新 tag（脚本自己会发现并以日志说明，不会中断整次运行）。
 - **失败**：构建失败后隔 `RETRY_WAIT`（默认 10 分钟）自动重试，同一提交最多 `RETRY_MAX`（默认 3）次，因为网络类的偶发失败（下载 Go 模块等）无法和代码错误区分开；用完仍失败就停下，等新提交，或手动 `ci build main --force`。发布失败（网络、token 过期）按同样的间隔重试。失败的构建带着 `build.log` 留在 `out/`，轮询日志里会打印日志末尾 15 行，GitHub 上该提交旁边显示红叉（需要 Commit statuses 权限）。
 - **中断**：服务被停止或服务器重启时正在进行的构建标记为 `interrupted`，下次轮询自动重做。
 - **并发**：同一时间只有一个构建（`state/lock`）。手动运行遇到定时器正在构建时会直接告知，不排队。

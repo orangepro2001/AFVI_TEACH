@@ -20,6 +20,7 @@
 #   --desktop          copy the installer to the Windows desktop (sha256 checked)
 #   --desktop-dir DIR  copy it to DIR instead (implies --desktop)
 #   --publish-latest   copy the installer to ~/afvi-latest for scripts/fetch-latest.ps1 on the Windows PC
+#   --publish-relhub   publish the installer to the release-publish update service (scripts/publish-relhub.sh)
 #   --fetch            wait for the build server's installer of the pushed commit (GitHub Release nightly,
 #                      up to 15 minutes) and download it to the desktop / DIR instead of copying the local one
 #
@@ -42,6 +43,7 @@ DESKTOP=false
 DESKTOP_DIR=""
 FETCH=false
 PUBLISH_LATEST=false
+PUBLISH_RELHUB=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -92,6 +94,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --publish-latest)
             PUBLISH_LATEST=true
+            shift
+            ;;
+        --publish-relhub)
+            PUBLISH_RELHUB=true
             shift
             ;;
         *)
@@ -252,6 +258,15 @@ if [ "$PUBLISH_LATEST" = true ]; then
     fi
     echo "==> publish the installer for the Windows PC (scripts/publish-latest.sh)"
     ./scripts/publish-latest.sh
+fi
+
+if [ "$PUBLISH_RELHUB" = true ]; then
+    if [ "$INSTALLER" != true ]; then
+        echo "ERROR: --publish-relhub needs the installer (drop --no-installer)"
+        exit 1
+    fi
+    echo "==> publish the installer to the update service (scripts/publish-relhub.sh)"
+    ./scripts/publish-relhub.sh
 fi
 
 echo "OK"

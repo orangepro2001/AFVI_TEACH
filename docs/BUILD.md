@@ -135,6 +135,45 @@ git push origin v1.0.0
 - 构建用的是仓库里的 `scripts/build-wsl.sh`，所以脚本依赖的文件（`scripts/package-wsl.sh`、`cmd/setup`、`cmd/mkinstaller`、`internal/installer`、`assets/icons` 等）必须已提交并推送，否则服务器上的构建会失败。
 - 服务器保留 Go 编译缓存，第一次编译 cgo 包装层较慢，之后的构建快得多。
 
+### 更新服务（release-publish / relhub）
+
+除了把安装包发到 GitHub Release，服务器还会把它发到本机的**更新服务** `release-publish`（命令名 `relhub`，`~/dev/release-publish`，podman 容器 `release-publish`，只听 `127.0.0.1:18790`，前缀 `/release`，对外由 Tailscale Serve 暴露成 `https://tony-ai-pc-1.tail9f7f1f.ts.net/release`）。它回答"有没有新版本、去哪里下载"，带 Ed25519 签名清单和 sha256 校验，并记录下载统计。
+
+这一步用来替代（目前是与它并存）"安装包放 `~/afvi-latest`、Windows 定时 ssh 拉取"那条链路：Windows 机器只要能用 HTTPS 访问反代即可，**不再依赖 ssh 免密登录**。应用内自动更新（Go SDK `relhub/pkg/relclient`）还没有接，见文末「后续」。
+
+**服务端一次性准备**（每台服务器做一次）:
+
+```bash
+relhub app create -id afvi-teach -name "AFVI Teach"
+relhub token create -name ci -app afvi-teach > /tmp/tok.txt   # 明文只打印这一次
+grep -o 'rl_[A-Za-z0-9_-]*' /tmp/tok.txt > ~/ci/afvi-teach/etc/relhub-token
+chmod 600 ~/ci/afvi-teach/etc/relhub-token && shred -u /tmp/tok.txt
+relhub token list                              # 确认 token 在，且只限定 afvi-teach
+```
+
+token 只是**发布**用的（服务端只存它的 SHA-256，丢了就 `relhub token revoke -id <id>` 重新签发）；下载侧不需要 token，读接口是公开的。`ci` 里这个文件是可选的：没有它就跳过这一步，GitHub 发布照常。`ci status` 会显示 `relhub` 那一行是开还是关。
+
+**发布**（`main` 的每一次构建由 `ci poll` 自动做；手动时用脚本）:
+
+```bash
+./scripts/publish-relhub.sh                    # dist/.last-installer 里的安装包
+./scripts/publish-relhub.sh dist/AFVI-Teach-Setup-<版本>.exe --dry-run
+./scripts/build-wsl.sh --publish-relhub        # 构建完成后顺带发布（需要安装包，不能和 --no-installer 同用）
+./scripts/publish-relhub.sh --channel beta     # 发到 beta 渠道，stable 用户看不到
+```
+
+**版本号规则**（`relhub` 用递增的整数 `versionCode` 判断新旧，客户端拿它和已安装的比）:
+
+- 基线取最近的 `v*` tag 的 `MAJOR.MINOR.PATCH`（预发布后缀只属于 tag 名，例如 `v0.1.0-rc2` → `0.1.0`）
+- `N` = 该 tag 之后的提交数，`patch = tag 的 patch * 100 + N`
+- `versionCode = MAJOR*10000 + MINOR*100 + patch`
+
+所以 `v0.1.0-rc2` 之后第 11 个提交是 `0.1.11` / code 111；下一个 tag `v0.1.1` 是 `0.1.100` / code 200，比它高。tag 之间超过 100 个提交就会撞号，此时脚本会以 `versionCode … is not higher` 拒绝发布并提示打 tag——**打一个新 tag 即可**，不要手工填 code。
+
+**安全性**：`relhub` 的 `stable` 清单带 Ed25519 签名，应用应当固定公钥（`relhub keys` 打印）。目前下载侧只有 sha256 校验（HTTPS + Tailscale 网络），签名校验留给路线 B 的 Go SDK 客户端。
+
+**后续（路线 B，还没做）**：把 `relhub/pkg/relclient` 引入程序，在 `teach-imgui` 里加一个 `internal/updater`（启动时后台 `Check`，UI 里提示，`Download` 断点续传并校验签名，然后调 `setup.exe -silent` 升级），这样"检查 → 下载 → 安装"全在应用内完成，不再依赖 Windows 侧的脚本与定时任务。代价是 `go.mod` 多一个 `require relhub`（配 `replace` 指向本机路径或 `go mod vendor`），并且构建服务器必须先拿到那份源码；路线 A 的发布端与它共用同一个 app、同一套版号规则。
+
 可选：运行配置包与核心算法测试（纯 Go，无需交叉编译）
 ```bash
 go test ./internal/config/... ./internal/core/... ./internal/inspect/... ./internal/model/... ./internal/snap/... ./internal/camera/... ./internal/link/... ./internal/appicon/... ./internal/installer/... ./internal/golden/...

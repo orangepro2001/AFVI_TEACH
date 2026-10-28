@@ -38,6 +38,13 @@ KEEP_MAIN=10
 BUILD_TIMEOUT=45m
 RETRY_MAX=3
 RETRY_WAIT=600
+# Update service (release-publish, "relhub"): after the GitHub release the installer is offered there
+# too, so an installed app can update itself. Opt-in: without etc/relhub-token nothing happens.
+RELHUB_URL=http://127.0.0.1:18790/release
+RELHUB_APP=afvi-teach
+RELHUB_PLATFORM=win-x64
+RELHUB_CHANNEL=stable
+RELHUB_TOKEN_FILE=$CI_HOME/etc/relhub-token
 if [ -f "$CONF" ]; then
     # shellcheck disable=SC1090
     . "$CONF"
@@ -254,6 +261,47 @@ publish_target() {
     fi
     meta_update "$dir" '.published=true | .published_at=$t | .release_url=$u' --arg t "$(now)" --arg u "$RELEASE_URL"
     log "published $kind $name: $RELEASE_URL"
+    publish_relhub "$sha" "$dir"
+}
+
+# publish_relhub <sha> <dir>: offer the installer on the update service as well, so an installed app
+# can find and download it without ssh / a shared folder. Opt-in through etc/relhub-token; a failure
+# is logged and never fails the run (GitHub stays the authoritative release, `ci publish <target>`
+# tries both again). The version rule lives in scripts/publish-relhub.sh; the copy of the built
+# commit is used, so the code always matches what was built.
+publish_relhub() {
+    local sha=$1 dir=$2 f script token rc=0
+    if [ ! -r "$RELHUB_TOKEN_FILE" ]; then
+        log "relhub: no $RELHUB_TOKEN_FILE, not offered there (see docs/BUILD.md)"
+        return 0
+    fi
+    f=$(ls "$dir"/AFVI-Teach-Setup-*.exe 2>/dev/null | head -1)
+    if [ -z "$f" ]; then
+        log "relhub: no installer in $dir, skipped"
+        return 0
+    fi
+    script=$STATE/publish-relhub.sh
+    if ! git -C "$SRC" show "$sha:scripts/publish-relhub.sh" > "$script.tmp" 2> /dev/null; then
+        rm -f "$script.tmp"
+        log "relhub: ${sha:0:7} has no scripts/publish-relhub.sh, skipped"
+        return 0
+    fi
+    mv -f "$script.tmp" "$script"
+    chmod +x "$script"
+    token=$(tr -d ' \r\n' < "$RELHUB_TOKEN_FILE")
+    printf '=== relhub %s ===\n' "$(basename "$f")" >> "$dir/build.log"
+    if ! RELHUB_URL=$RELHUB_URL RELHUB_TOKEN=$token AFVI_CI_HOME=$CI_HOME \
+        "$script" "$f" --app "$RELHUB_APP" --platform "$RELHUB_PLATFORM" --channel "$RELHUB_CHANNEL" \
+        --git-dir "$SRC" --git-rev "$sha" >> "$dir/build.log" 2>&1; then
+        rc=1
+    fi
+    meta_update "$dir" '.relhub=$ok' --argjson ok "$((1 - rc))"
+    if [ "$rc" -ne 0 ]; then
+        log "relhub: publishing $(basename "$f") failed, see $dir/build.log (GitHub is unaffected)"
+        return 0
+    fi
+    log "relhub: $(basename "$f") offered on $RELHUB_APP/$RELHUB_PLATFORM ($RELHUB_URL)"
+    return 0
 }
 
 # --- source and build -----------------------------------------------------------------------
@@ -510,6 +558,11 @@ cmd_status() {
         printf 'token      present\n'
     else
         printf 'token      MISSING, builds stay unpublished (ci set-token)\n'
+    fi
+    if [ -r "$RELHUB_TOKEN_FILE" ]; then
+        printf 'relhub     %s (app %s/%s, channel %s)\n' "$RELHUB_URL" "$RELHUB_APP" "$RELHUB_PLATFORM" "$RELHUB_CHANNEL"
+    else
+        printf 'relhub     off (no %s, see docs/BUILD.md)\n' "$RELHUB_TOKEN_FILE"
     fi
     printf 'timer      %s' "$(systemctl --user is-active afvi-ci.timer 2> /dev/null || true)"
     printf '   %s\n' "$(systemctl --user list-timers afvi-ci.timer --no-legend 2> /dev/null | awk '{print "next:", $1, $2, $3}' || true)"
