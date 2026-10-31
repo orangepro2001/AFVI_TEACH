@@ -1,0 +1,21 @@
+# 机密材料：一律不入库（密钥只放在 ~/.config/llm-mcp/ 里，权限 600）
+KEY.txt
+key.txt
+api-key
+*.key
+*.pem
+.env
+.env.*
+secrets*
+*secret*
+
+# 本机配置（含端点 / 密钥路径），模板见 llm-mcp.example.json
+llm-mcp.json
+llm-mcp.local.json
+
+# 构建产物
+bin/
+dist/
+*.exe
+*.test
+*.out

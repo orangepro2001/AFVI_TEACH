@@ -1,0 +1,45 @@
+{
+  "default": "deepseek",
+  "token_file": "~/.config/llm-mcp/token",
+  "providers": [
+    {
+      "name": "deepseek",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key_file": "~/.config/llm-mcp/api-key",
+      "model": "deepseek-chat",
+      "models": {
+        "chat": "deepseek-chat",
+        "reasoner": "deepseek-reasoner"
+      },
+      "temperature": 0.3,
+      "max_tokens": 8192,
+      "timeout": "300s",
+      "cost": "low",
+      "note": "中等及以下任务的默认选择：快、便宜"
+    },
+    {
+      "name": "gpt",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_file": "~/.config/llm-mcp/gpt-key",
+      "model": "gpt-5",
+      "models": {
+        "astra": "gpt-5",
+        "hard": "gpt-5"
+      },
+      "params": {
+        "reasoning_effort": "max"
+      },
+      "max_tokens": 32768,
+      "timeout": "600s",
+      "cost": "high",
+      "note": "可靠但高价（最高档 reasoning effort）：复杂、高风险或需要最强推理的任务才用它"
+    },
+    {
+      "name": "local",
+      "base_url": "http://127.0.0.1:11434/v1",
+      "api_key": "ollama",
+      "model": "qwen2.5-coder:7b",
+      "timeout": "600s"
+    }
+  ]
+}

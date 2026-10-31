@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "deepseek": {
+      "type": "http",
+      "url": "https://egg.tail9f7f1f.ts.net/mcp",
+      "description": "本机 LLM 网关：默认 deepseek（中等任务），model=\"gpt\" 用于复杂任务（可靠但高价）",
+      "timeout": 300,
+      "exposure": "direct"
+    },
+    "deepseek-local": {
+      "command": "/home/ubuntu/dev/AFVI_TEACH/LLM-MCP/bin/llm-mcp",
+      "args": [],
+      "description": "同一台机器上走 stdio（最快，同样零配置）",
+      "timeout": 300,
+      "exposure": "direct",
+      "enabled": false
+    }
+  }
+}
